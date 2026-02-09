@@ -439,8 +439,8 @@
 	
 	<!-- Card boundary lines extending up to timeline for selected card -->
 	{#if selectedCard !== null}
-		{@const startScreenX = selectedCard.startX * scale + translateX}
-		{@const endScreenX = selectedCard.endX * scale + translateX}
+		{@const startScreenX = Math.round(selectedCard.startX * scale + translateX)}
+		{@const endScreenX = Math.round(selectedCard.endX * scale + translateX)}
 		<div
 			class="card-boundary-line start"
 			class:active={activeResizeEdge === 'left'}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import { TimeScaleManager } from "../utils/TimeScaleManager";
 
 	interface Props {
 		x: number;
@@ -29,10 +30,9 @@
 	const GRID_SPACING = 50;
 	const START_DATE = new Date('1970-01-01');
 	const EDGE_ZONE = 8; // px from edge to trigger resize handle
-	const MIN_WIDTH_DAYS = 1;
 	
-	// Calculate min width in pixels based on current time scale
-	let MIN_WIDTH_PX = $derived(() => MIN_WIDTH_DAYS * timeScale);
+	// Get current scale level for marker-based snapping
+	let scaleLevel = $derived(() => TimeScaleManager.getScaleLevel(timeScale));
 
 	// Local display state - used during drag operations
 	let displayX = $state(x);
@@ -82,14 +82,12 @@
 		return -layerNum * GRID_SPACING;
 	}
 
-	// Calculate date from X position (days since START_DATE)
+	// Calculate date from X position using unified coordinate functions
 	function xToDate(xPos: number): string {
-		const days = Math.round(xPos / timeScale);
-		const date = new Date(START_DATE.getTime() + days * 24 * 60 * 60 * 1000);
-		const day = date.getDate().toString().padStart(2, '0');
-		const month = (date.getMonth() + 1).toString().padStart(2, '0');
-		const year = date.getFullYear();
-		return `${day}/${month}/${year}`;
+		// Convert world X to day using unified function
+		const days = TimeScaleManager.worldXToDay(xPos, timeScale);
+		const scaleLevel = TimeScaleManager.getScaleLevel(timeScale);
+		return TimeScaleManager.formatDateForLevel(Math.round(days), scaleLevel);
 	}
 
 	// Update selection boundary data during drag/resize
@@ -128,16 +126,24 @@
 			
 			if (resizeEdge === 'right') {
 				// Right edge: change width
-				let newWidth = dragStartWidth + worldDelta;
-				// Snap to whole days and enforce minimum
-				let days = Math.round(newWidth / timeScale);
-				days = Math.max(days, MIN_WIDTH_DAYS);
-				newWidth = days * timeScale;
+				// Calculate the target end position in world coordinates
+				const targetEndX = dragStartX + dragStartWidth + worldDelta;
+				// Convert to day and snap to nearest marker
+				const targetEndDay = TimeScaleManager.worldXToDay(targetEndX, timeScale);
+				const snappedEndDay = TimeScaleManager.snapToNearestMarker(Math.round(targetEndDay), scaleLevel());
+				// Convert back to world coordinate
+				const snappedEndX = TimeScaleManager.dayToWorldX(snappedEndDay, timeScale);
+				// Calculate new width (ensure minimum 1 day)
+				let newWidth = snappedEndX - dragStartX;
+				const minWidth = TimeScaleManager.dayToWorldX(1, timeScale);
+				if (newWidth < minWidth) {
+					newWidth = minWidth;
+				}
 				
 				// Update local display state directly
 				displayWidth = newWidth;
 				
-				console.log('Resize right:', { dragStartX, newWidth, worldDelta });
+				console.log('Resize right:', { dragStartX, newWidth, targetEndDay, snappedEndDay });
 				
 				// Notify parent for optimistic updates, but don't wait for response
 				if (onResize) {
@@ -148,21 +154,29 @@
 				updateSelectionData();
 			} else if (resizeEdge === 'left') {
 				// Left edge: change position and width
-				let newWidth = dragStartWidth - worldDelta;
+				// Calculate the target start position in world coordinates
+				const targetStartX = dragStartX + worldDelta;
+				// Convert to day and snap to nearest marker
+				const targetStartDay = TimeScaleManager.worldXToDay(targetStartX, timeScale);
+				const snappedStartDay = TimeScaleManager.snapToNearestMarker(Math.round(targetStartDay), scaleLevel());
+				// Convert back to world coordinate
+				const snappedStartX = TimeScaleManager.dayToWorldX(snappedStartDay, timeScale);
 				
-				// Snap to whole days and enforce minimum
-				let days = Math.round(newWidth / timeScale);
-				days = Math.max(days, MIN_WIDTH_DAYS);
-				newWidth = days * timeScale;
-				
-				// Calculate new X based on new width to keep end date constant
-				let newX = (dragStartX + dragStartWidth) - newWidth;
+				// Calculate new width based on snapped start (keeping end position fixed)
+				const endX = dragStartX + dragStartWidth;
+				let newWidth = endX - snappedStartX;
+				const minWidth = TimeScaleManager.dayToWorldX(1, timeScale);
+				if (newWidth < minWidth) {
+					// If would be too small, push the end instead
+					newWidth = minWidth;
+				}
+				const newX = endX - newWidth;
 				
 				// Update local display state directly
 				displayX = newX;
 				displayWidth = newWidth;
 				
-				console.log('Resize left:', { dragStartX, newX, newWidth, worldDelta });
+				console.log('Resize left:', { newX, newWidth, targetStartDay, snappedStartDay });
 				
 				// Notify parent for optimistic updates, but don't wait for response
 				if (onResize) {
@@ -181,9 +195,10 @@
 			
 			// Calculate new X position
 			let newX = dragStartX + worldDeltaX;
-			// Snap to whole days
-			let days = Math.round(newX / timeScale);
-			newX = days * timeScale;
+			// Snap to nearest marker position (like resizing does)
+			const targetDay = TimeScaleManager.worldXToDay(newX, timeScale);
+			const snappedDay = TimeScaleManager.snapToNearestMarker(Math.round(targetDay), scaleLevel());
+			newX = TimeScaleManager.dayToWorldX(snappedDay, timeScale);
 			
 			// Calculate new Y position and target layer
 			let newY = dragStartY + worldDeltaY;

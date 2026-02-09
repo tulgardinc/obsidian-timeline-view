@@ -1,5 +1,5 @@
 <script lang="ts">
-	const START_DATE = new Date('1970-01-01');
+	import { TimeScaleManager, type ScaleLevel } from "../utils/TimeScaleManager";
 
 	interface CardHoverData {
 		startX: number;
@@ -21,71 +21,58 @@
 		activeResizeEdge?: 'left' | 'right' | null;
 	}
 
-	let { scale, timeScale, translateX, viewportWidth, mouseX, isHovering, selectedCard = null, isAnyCardResizing = false, activeResizeEdge = null }: Props = $props();
+	let { 
+		scale, 
+		timeScale, 
+		translateX, 
+		viewportWidth, 
+		mouseX, 
+		isHovering, 
+		selectedCard = null, 
+		isAnyCardResizing = false, 
+		activeResizeEdge = null 
+	}: Props = $props();
 
-	// Calculate visible day markers with proper viewport culling
-	let visibleMarkers = $derived(() => {
-		const markers: Array<{ screenX: number; day: number; isMonday: boolean }> = [];
-		
-		// Calculate the day range that could potentially be visible
-		// Start from the left edge of the viewport
-		const startDay = Math.floor((-translateX / scale) / timeScale);
-		// End at the right edge of the viewport
-		const endDay = Math.ceil(((-translateX + viewportWidth) / scale) / timeScale);
-		
-		for (let day = startDay; day <= endDay; day++) {
-			// Calculate screen position for this marker
-			const worldX = day * timeScale;
-			const screenX = worldX * scale + translateX;
-			
-			// Cull markers that are outside the viewport
-			// Allow 1px buffer on each side for partially visible markers
-			if (screenX >= -1 && screenX <= viewportWidth + 1) {
-				// Check if this day is a Monday
-				// Day 0 = 1970-01-01 = Thursday, so Monday is when (day + 4) % 7 === 0
-				const isMonday = (day + 4) % 7 === 0;
-				markers.push({
-					screenX,
-					day,
-					isMonday
-				});
-			}
-		}
-		
-		return markers;
+	// Calculate current scale level based on timeScale
+	let scaleLevel = $derived(() => {
+		return TimeScaleManager.getScaleLevel(timeScale);
 	});
 
-	// Calculate date from mouse position
-	let hoverDate = $derived(() => {
+	// Calculate visible markers using the scale manager
+	let visibleMarkers = $derived(() => {
+		const level = scaleLevel();
+		return TimeScaleManager.getVisibleMarkers(
+			level,
+			timeScale,
+			scale,
+			translateX,
+			viewportWidth
+		);
+	});
+
+	// Calculate hover date/position info using unified coordinate functions
+	let hoverInfo = $derived(() => {
 		if (mouseX === null || !isHovering) return null;
 		
-		// Convert mouse X to world coordinates
-		const worldX = (mouseX - translateX) / scale;
-		const days = Math.floor(worldX / timeScale);
-		
-		// Calculate date
-		const date = new Date(START_DATE.getTime() + days * 24 * 60 * 60 * 1000);
-		
-		// Format as dd/mm/yyyy
-		const day = date.getDate().toString().padStart(2, '0');
-		const month = (date.getMonth() + 1).toString().padStart(2, '0');
-		const year = date.getFullYear();
+		const level = scaleLevel();
+		// Use unified screen->day conversion (floored for hover display)
+		const day = Math.floor(TimeScaleManager.screenXToDay(mouseX, timeScale, scale, translateX));
 		
 		return {
-			formatted: `${day}/${month}/${year}`,
-			worldX,
-			days
+			day,
+			formatted: TimeScaleManager.formatDateForLevel(day, level),
+			screenX: mouseX
 		};
 	});
 </script>
 
 <div class="timeline-container">
 	<div class="timeline-layer">
-		<!-- Day markers - positioned individually in screen space -->
-		{#each visibleMarkers() as marker (marker.day)}
+		<!-- Dynamic markers based on scale level -->
+		{#each visibleMarkers() as marker (marker.unitIndex)}
 			<div
-				class="day-marker"
-				class:monday={marker.isMonday}
+				class="time-marker"
+				class:large={marker.isLarge}
 				style="left: {Math.round(marker.screenX)}px;"
 			></div>
 		{/each}
@@ -96,14 +83,13 @@
 	
 	<!-- Hover overlay (stays at mouse position) - hidden when resizing -->
 	{#if isHovering && mouseX !== null && !isAnyCardResizing}
-		{@const hoverInfo = hoverDate()}
-		{#if hoverInfo}
-			{@const screenX = hoverInfo.worldX * scale + translateX}
+		{@const info = hoverInfo()}
+		{#if info}
 			<div
 				class="hover-indicator"
-				style="left: {screenX}px;"
+				style="left: {info.screenX}px;"
 			>
-				<div class="date-label">{hoverInfo.formatted}</div>
+				<div class="date-label">{info.formatted}</div>
 				<div class="vertical-bar"></div>
 			</div>
 		{/if}
@@ -111,8 +97,8 @@
 	
 	<!-- Card boundary lines (when a card is selected) -->
 	{#if selectedCard !== null}
-		{@const startScreenX = selectedCard.startX * scale + translateX}
-		{@const endScreenX = selectedCard.endX * scale + translateX}
+		{@const startScreenX = Math.round(selectedCard.startX * scale + translateX)}
+		{@const endScreenX = Math.round(selectedCard.endX * scale + translateX)}
 		<div
 			class="card-boundary-line start"
 			class:active={activeResizeEdge === 'left'}
@@ -161,7 +147,8 @@
 		background-color: var(--text-muted);
 	}
 
-	.day-marker {
+	/* Base marker style */
+	.time-marker {
 		position: absolute;
 		bottom: 0;
 		width: 1px;
@@ -170,7 +157,8 @@
 		transform: translateX(-0.5px);
 	}
 
-	.day-marker.monday {
+	/* Large marker style (Mondays, month starts, year starts, etc.) */
+	.time-marker.large {
 		width: 2px;
 		height: 12px;
 		background-color: var(--text-normal);

@@ -3,6 +3,7 @@ import Timeline from "../components/Timeline.svelte";
 import { mount, unmount } from "svelte";
 import { LayerManager, type LayerableItem, type LayerAssignment, type TimelineColor } from "../utils/LayerManager";
 import { TimelineHistoryManager, type TimelineState } from "../utils/TimelineHistoryManager";
+import { TimeScaleManager } from "../utils/TimeScaleManager";
 
 export const VIEW_TYPE_TIMELINE = "timeline-view";
 
@@ -158,11 +159,11 @@ export class TimelineView extends ItemView {
 		// Convert to TimelineItems with calculated positions
 		const items: TimelineItem[] = [];
 		for (const item of sortedItems) {
-			// Calculate x position (days from epoch start)
+			// Calculate x position (days from epoch start) using unified coordinate function
 			const daysFromStart = this.daysBetween(START_DATE, item.dateStart);
-			const x = daysFromStart * this.timeScale;
+			const x = TimeScaleManager.dayToWorldX(daysFromStart, this.timeScale);
 			
-			// Calculate width (duration in days)
+			// Calculate width (duration in days) using unified coordinate function
 			const duration = this.daysBetween(item.dateStart, item.dateEnd);
 			const width = Math.max(duration, 1) * this.timeScale;
 			
@@ -239,13 +240,14 @@ export class TimelineView extends ItemView {
 	}
 
 	private pixelsToDate(pixels: number): string {
-		const days = Math.round(pixels / this.timeScale);
+		// Use unified coordinate function to convert world X to days
+		const days = Math.round(TimeScaleManager.worldXToDay(pixels, this.timeScale));
 		const msOffset = days * 24 * 60 * 60 * 1000;
 		const date = new Date(START_DATE.getTime() + msOffset);
 		
 		const year = date.getFullYear();
 		const month = String(date.getMonth() + 1).padStart(2, '0');
-		const day = String(date.getDate()).padStart(2, '0');
+		const day = String(date.getDate()).toString().padStart(2, '0');
 		
 		console.log(`pixelsToDate: pixels=${pixels}, days=${days}, msOffset=${msOffset}, result=${year}-${month}-${day}`);
 		
@@ -257,11 +259,11 @@ export class TimelineView extends ItemView {
 		for (let i = 0; i < this.timelineItems.length; i++) {
 			const item = this.timelineItems[i]!;
 			
-			// Calculate days from epoch for start date
+			// Calculate days from epoch for start date using unified coordinate function
 			const dateStart = this.parseDate(item.dateStart);
 			if (!dateStart) continue;
 			const daysFromStart = this.daysBetween(START_DATE, dateStart);
-			const newX = daysFromStart * this.timeScale;
+			const newX = TimeScaleManager.dayToWorldX(daysFromStart, this.timeScale);
 			
 			// Calculate duration and width
 			const dateEnd = this.parseDate(item.dateEnd);
@@ -281,11 +283,21 @@ export class TimelineView extends ItemView {
 		if (this.selectedIndex !== null && this.selectedCardData) {
 			const item = this.timelineItems[this.selectedIndex];
 			if (item) {
+				// Update positions and reformat dates for current scale level
+				const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
+				const daysStart = Math.round(TimeScaleManager.worldXToDay(item.x, this.timeScale));
+				const daysEnd = Math.round(TimeScaleManager.worldXToDay(item.x + item.width, this.timeScale));
+				
 				this.selectedCardData = {
 					...this.selectedCardData,
 					startX: item.x,
-					endX: item.x + item.width
+					endX: item.x + item.width,
+					startDate: TimeScaleManager.formatDateForLevel(daysStart, scaleLevel),
+					endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel)
 				};
+				
+				// Push updated selection data to the component so boundary lines update
+				this.updateSelectionInComponent();
 			}
 		}
 		
@@ -693,24 +705,16 @@ export class TimelineView extends ItemView {
 		if (index >= 0 && index < this.timelineItems.length) {
 			const item = this.timelineItems[index]!;
 			
-			// Calculate dates from positions
-			const daysStart = Math.round(item.x / this.timeScale);
-			const dateStart = new Date(START_DATE.getTime() + daysStart * 24 * 60 * 60 * 1000);
-			const dayStart = dateStart.getDate().toString().padStart(2, '0');
-			const monthStart = (dateStart.getMonth() + 1).toString().padStart(2, '0');
-			const yearStart = dateStart.getFullYear();
-			
-			const daysEnd = Math.round((item.x + item.width) / this.timeScale);
-			const dateEnd = new Date(START_DATE.getTime() + daysEnd * 24 * 60 * 60 * 1000);
-			const dayEnd = dateEnd.getDate().toString().padStart(2, '0');
-			const monthEnd = (dateEnd.getMonth() + 1).toString().padStart(2, '0');
-			const yearEnd = dateEnd.getFullYear();
+			// Calculate dates from positions using unified coordinate functions
+			const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
+			const daysStart = Math.round(TimeScaleManager.worldXToDay(item.x, this.timeScale));
+			const daysEnd = Math.round(TimeScaleManager.worldXToDay(item.x + item.width, this.timeScale));
 			
 			this.selectedCardData = {
 				startX: item.x,
 				endX: item.x + item.width,
-				startDate: `${dayStart}/${monthStart}/${yearStart}`,
-				endDate: `${dayEnd}/${monthEnd}/${yearEnd}`,
+				startDate: TimeScaleManager.formatDateForLevel(daysStart, scaleLevel),
+				endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel),
 				title: item.title
 			};
 			console.log('TimelineView: selectedCardData calculated:', this.selectedCardData);
@@ -740,24 +744,16 @@ export class TimelineView extends ItemView {
 			if (index >= 0 && index < this.timelineItems.length) {
 				const item = this.timelineItems[index]!;
 				
-				// Calculate dates from positions
-				const daysStart = Math.round(item.x / this.timeScale);
-				const dateStart = new Date(START_DATE.getTime() + daysStart * 24 * 60 * 60 * 1000);
-				const dayStart = dateStart.getDate().toString().padStart(2, '0');
-				const monthStart = (dateStart.getMonth() + 1).toString().padStart(2, '0');
-				const yearStart = dateStart.getFullYear();
-				
-				const daysEnd = Math.round((item.x + item.width) / this.timeScale);
-				const dateEnd = new Date(START_DATE.getTime() + daysEnd * 24 * 60 * 60 * 1000);
-				const dayEnd = dateEnd.getDate().toString().padStart(2, '0');
-				const monthEnd = (dateEnd.getMonth() + 1).toString().padStart(2, '0');
-				const yearEnd = dateEnd.getFullYear();
+				// Calculate dates from positions using unified coordinate functions
+				const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
+				const daysStart = Math.round(TimeScaleManager.worldXToDay(item.x, this.timeScale));
+				const daysEnd = Math.round(TimeScaleManager.worldXToDay(item.x + item.width, this.timeScale));
 				
 				this.selectedCardData = {
 					startX: item.x,
 					endX: item.x + item.width,
-					startDate: `${dayStart}/${monthStart}/${yearStart}`,
-					endDate: `${dayEnd}/${monthEnd}/${yearEnd}`,
+					startDate: TimeScaleManager.formatDateForLevel(daysStart, scaleLevel),
+					endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel),
 					title: item.title
 				};
 				console.log('TimelineView: selectedCardData calculated:', this.selectedCardData);
@@ -844,15 +840,20 @@ export class TimelineView extends ItemView {
 						// Select the card after move/resize (do not open file)
 						this.selectCard(index);
 					},
-					onUpdateSelectionData: (startX: number, endX: number, startDate: string, endDate: string) => {
+						onUpdateSelectionData: (startX: number, endX: number, startDate: string, endDate: string) => {
 						// Update selection data during drag/resize so indicators follow the card
 						if (this.selectedIndex !== null && this.selectedCardData) {
+							// Reformat dates using unified coordinate functions
+							const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
+							const daysStart = Math.round(TimeScaleManager.worldXToDay(startX, this.timeScale));
+							const daysEnd = Math.round(TimeScaleManager.worldXToDay(endX, this.timeScale));
+							
 							this.selectedCardData = {
 								...this.selectedCardData,
 								startX,
 								endX,
-								startDate,
-								endDate
+								startDate: TimeScaleManager.formatDateForLevel(daysStart, scaleLevel),
+								endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel)
 							};
 							// Update the component immediately
 							if (this.component && this.component.setSelection) {
