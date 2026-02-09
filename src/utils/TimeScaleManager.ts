@@ -43,14 +43,18 @@ const BASE_TIME_SCALES = [
 
 export class TimeScaleManager {
 	/**
-	 * Determine the appropriate scale level based on current timeScale
+	 * Determine the appropriate scale level based on effective visual density
+	 * Effective density = timeScale * scale (canvas zoom factor)
 	 * When small markers would be closer than MIN_MARKER_SPACING, go to next level
 	 */
-	static getScaleLevel(timeScale: number): ScaleLevel {
+	static getScaleLevel(timeScale: number, scale: number = 1): ScaleLevel {
+		// Calculate effective visual density combining both zoom factors
+		const effectiveDensity = timeScale * scale;
+		
 		// Start from level 0 and find the appropriate level
 		for (let level = 0; level < 20; level++) {
 			const baseScale = this.getBaseScaleForLevel(level);
-			const pixelsPerSmallUnit = timeScale * baseScale;
+			const pixelsPerSmallUnit = effectiveDensity * baseScale;
 			
 			// If small markers would be at least MIN_MARKER_SPACING apart, this level is good
 			if (pixelsPerSmallUnit >= MIN_MARKER_SPACING) {

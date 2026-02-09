@@ -137,10 +137,14 @@
 		if (isTrackpad) {
 			// Trackpad behavior
 			if (isPinch) {
-				// Pinch gesture = Canvas zoom (this takes priority over Cmd+pinch)
+				// Pinch gesture = Unified zoom (scale + timeScale together to preserve aspect ratio)
 				const zoomFactor = 0.1;
 				const delta = event.deltaY > 0 ? -zoomFactor : zoomFactor;
-				const newScale = scale * (1 + delta);
+				const zoomMultiplier = 1 + delta;
+				
+				// Calculate new values for both scale and timeScale
+				const newScale = scale * zoomMultiplier;
+				const newTimeScale = timeScale * zoomMultiplier;
 				
 				// Zoom towards center of viewport
 				const rect = viewportRef.getBoundingClientRect();
@@ -148,36 +152,40 @@
 				const centerY = rect.height / 2;
 				
 				// Calculate world coordinates before zoom
+				// World coordinates are based on the old scale/timeScale
 				const worldX = (centerX - translateX) / scale;
+				const worldCenterTime = (centerX - translateX) / timeScale;
 				const worldY = (centerY - translateY) / scale;
 				
-				// Apply new scale
+				// Apply new scale values
 				scale = newScale;
+				timeScale = newTimeScale;
 				
 				// Adjust translation to keep center stable
-				translateX = centerX - worldX * scale;
+				// X translation keeps the same world time position
+				translateX = centerX - worldCenterTime * timeScale;
 				translateY = centerY - worldY * scale;
 				
 				// Trigger crisp render after zoom
 				triggerCrispRender();
 			} else if (isCmdHeld) {
-				// Cmd + two-finger scroll = Time-scale zoom
+				// Cmd + two-finger scroll = Time-scale zoom (zoom toward last known mouse position)
 				const zoomFactor = 0.1;
 				const delta = event.deltaY > 0 ? -zoomFactor : zoomFactor;
 				const newTimeScale = timeScale * (1 + delta);
 				
-				// Get viewport center
+				// Use last known mouse position, or center if mouse not in viewport
 				const rect = viewportRef.getBoundingClientRect();
-				const centerX = rect.width / 2;
+				const zoomCenterX = mouseX !== null ? mouseX : rect.width / 2;
 				
-				// Calculate world coordinates of center before zoom
-				const worldCenterX = (centerX - translateX) / timeScale;
+				// Calculate world time coordinate at zoom center before zoom
+				const worldCenterTime = (zoomCenterX - translateX) / timeScale;
 				
 				// Apply new time scale
 				timeScale = newTimeScale;
 				
-				// Adjust translation to keep center point stable
-				translateX = centerX - worldCenterX * timeScale;
+				// Adjust translation to keep zoom center over same world time
+				translateX = zoomCenterX - worldCenterTime * timeScale;
 			} else {
 				// Two-finger scroll without modifier = Pan
 				translateX -= event.deltaX;
@@ -186,44 +194,51 @@
 		} else {
 			// Mouse wheel behavior (unchanged)
 			if (event.ctrlKey || event.metaKey) {
-				// Ctrl/Cmd + wheel = Time-scale zoom
+				// Ctrl/Cmd + wheel = Time-scale zoom (zoom toward mouse cursor)
 				const zoomFactor = 0.1;
 				const delta = event.deltaY > 0 ? -zoomFactor : zoomFactor;
 				const newTimeScale = timeScale * (1 + delta);
 				
-				// Get viewport center
+				// Get mouse position within viewport
 				const rect = viewportRef.getBoundingClientRect();
-				const centerX = rect.width / 2;
+				const mouseXPos = event.clientX - rect.left;
 				
-				// Calculate world coordinates of center before zoom
-				const worldCenterX = (centerX - translateX) / timeScale;
+				// Calculate world time coordinate at mouse position before zoom
+				const worldMouseTime = (mouseXPos - translateX) / timeScale;
 				
 				// Apply new time scale
 				timeScale = newTimeScale;
 				
-				// Adjust translation to keep center point stable
-				translateX = centerX - worldCenterX * timeScale;
+				// Adjust translation to keep mouse position over same world time
+				translateX = mouseXPos - worldMouseTime * timeScale;
 			} else {
-				// Mouse wheel alone = Canvas zoom
+				// Mouse wheel alone = Unified zoom (scale + timeScale together to preserve aspect ratio)
 				const zoomFactor = 0.1;
 				const delta = event.deltaY > 0 ? -zoomFactor : zoomFactor;
-				const newScale = scale * (1 + delta);
+				const zoomMultiplier = 1 + delta;
+				
+				// Calculate new values for both scale and timeScale
+				const newScale = scale * zoomMultiplier;
+				const newTimeScale = timeScale * zoomMultiplier;
 				
 				// Zoom towards mouse position
 				const rect = viewportRef.getBoundingClientRect();
-				const mouseX = event.clientX - rect.left;
-				const mouseY = event.clientY - rect.top;
+				const mouseXPos = event.clientX - rect.left;
+				const mouseYPos = event.clientY - rect.top;
 				
 				// Calculate world coordinates before zoom
-				const worldX = (mouseX - translateX) / scale;
-				const worldY = (mouseY - translateY) / scale;
+				const worldX = (mouseXPos - translateX) / scale;
+				const worldCenterTime = (mouseXPos - translateX) / timeScale;
+				const worldY = (mouseYPos - translateY) / scale;
 				
-				// Apply new scale
+				// Apply new scale values
 				scale = newScale;
+				timeScale = newTimeScale;
 				
 				// Adjust translation to keep mouse over same world point
-				translateX = mouseX - worldX * scale;
-				translateY = mouseY - worldY * scale;
+				// X translation keeps the same world time position
+				translateX = mouseXPos - worldCenterTime * timeScale;
+				translateY = mouseYPos - worldY * scale;
 				
 				// Trigger crisp render after zoom
 				triggerCrispRender();
@@ -323,7 +338,7 @@
 			lastMouseX = touch.clientX;
 			lastMouseY = touch.clientY;
 		} else if (event.touches.length === 2) {
-			// Pinch zoom
+			// Pinch zoom = Unified zoom (scale + timeScale together to preserve aspect ratio)
 			const touch1 = event.touches[0];
 			const touch2 = event.touches[1];
 			if (!touch1 || !touch2) return;
@@ -336,14 +351,15 @@
 			const centerY = (touch1.clientY + touch2.clientY) / 2 - rect.top;
 			
 			// Calculate world coordinates before zoom
-			const worldX = (centerX - translateX) / scale;
+			const worldCenterTime = (centerX - translateX) / timeScale;
 			const worldY = (centerY - translateY) / scale;
 			
-			// Apply new scale
-			scale = Math.max(0.1, Math.min(5, scale * scaleFactor));
+			// Apply new scale values (both scale and timeScale together)
+			scale = scale * scaleFactor;
+			timeScale = timeScale * scaleFactor;
 			
-			// Adjust translation to keep center over same world point
-			translateX = centerX - worldX * scale;
+			// Adjust translation to keep center over same world time position
+			translateX = centerX - worldCenterTime * timeScale;
 			translateY = centerY - worldY * scale;
 			
 			lastTouchDistance = newDistance;
@@ -468,8 +484,8 @@
 	</div>
 	
 	<div class="controls">
-		<div class="zoom-level">{Math.round(scale * 100)}%</div>
-		<button onclick={resetZoom}>Reset Zoom</button>
+		<div class="zoom-level">Y:{Math.round(scale * 100)}% | Time:{Math.round(timeScale * 10) / 10}</div>
+		<button onclick={resetZoom}>Reset Y Zoom</button>
 		<button onclick={centerView}>Center</button>
 	</div>
 </div>

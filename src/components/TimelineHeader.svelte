@@ -33,9 +33,9 @@
 		activeResizeEdge = null 
 	}: Props = $props();
 
-	// Calculate current scale level based on timeScale
+	// Calculate current scale level based on effective density (timeScale * scale)
 	let scaleLevel = $derived(() => {
-		return TimeScaleManager.getScaleLevel(timeScale);
+		return TimeScaleManager.getScaleLevel(timeScale, scale);
 	});
 
 	// Calculate visible markers using the scale manager
@@ -56,7 +56,7 @@
 		
 		const level = scaleLevel();
 		// Use unified screen->day conversion (floored for hover display)
-		const day = Math.floor(TimeScaleManager.screenXToDay(mouseX, timeScale, scale, translateX));
+		const day = Math.floor(TimeScaleManager.screenToDay(mouseX, timeScale, scale, translateX));
 		
 		return {
 			day,

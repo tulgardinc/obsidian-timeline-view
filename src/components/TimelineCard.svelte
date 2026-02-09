@@ -31,8 +31,8 @@
 	const START_DATE = new Date('1970-01-01');
 	const EDGE_ZONE = 8; // px from edge to trigger resize handle
 	
-	// Get current scale level for marker-based snapping
-	let scaleLevel = $derived(() => TimeScaleManager.getScaleLevel(timeScale));
+	// Get current scale level for marker-based snapping (uses effective density = timeScale * scale)
+	let scaleLevel = $derived(() => TimeScaleManager.getScaleLevel(timeScale, scale));
 
 	// Local display state - used during drag operations
 	let displayX = $state(x);
@@ -86,7 +86,7 @@
 	function xToDate(xPos: number): string {
 		// Convert world X to day using unified function
 		const days = TimeScaleManager.worldXToDay(xPos, timeScale);
-		const scaleLevel = TimeScaleManager.getScaleLevel(timeScale);
+		const scaleLevel = TimeScaleManager.getScaleLevel(timeScale, scale);
 		return TimeScaleManager.formatDateForLevel(Math.round(days), scaleLevel);
 	}
 
