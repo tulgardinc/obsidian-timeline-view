@@ -6,3 +6,32 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+/* Timeline card color theme integration
+   These variables are provided by Obsidian's active theme */
+.timeline-card .color-line {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 3px;
+	background: transparent;
+	border-radius: 4px 4px 0 0;
+	z-index: 1;
+}
+
+.timeline-card.color-red .color-line {
+	background: var(--color-red, #e53935);
+}
+
+.timeline-card.color-blue .color-line {
+	background: var(--color-blue, #1e88e5);
+}
+
+.timeline-card.color-green .color-line {
+	background: var(--color-green, #43a047);
+}
+
+.timeline-card.color-yellow .color-line {
+	background: var(--color-yellow, #fdd835);
+}

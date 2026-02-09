@@ -1,25 +1,34 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
-
-// Remember to rename these classes and interfaces!
+import {App, Editor, MarkdownView, Modal, Notice, Plugin, WorkspaceLeaf, type MarkdownFileInfo} from 'obsidian';
+import {DEFAULT_SETTINGS, type MyPluginSettings, SampleSettingTab} from "./settings";
+import {TimelineView, VIEW_TYPE_TIMELINE} from "./views/TimelineView";
 
 export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+	settings!: MyPluginSettings;
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		// Register the Timeline view
+		this.registerView(
+			VIEW_TYPE_TIMELINE,
+			(leaf: WorkspaceLeaf) => new TimelineView(leaf)
+		);
+
+		// Add ribbon icon to open Timeline view
+		this.addRibbonIcon('calendar', 'Open Timeline view', () => {
+			this.openTimelineView();
 		});
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+		// Add command to open Timeline view
+		this.addCommand({
+			id: 'open-timeline-view',
+			name: 'Open Timeline view',
+			callback: () => {
+				this.openTimelineView();
+			}
+		});
 
-		// This adds a simple command that can be triggered anywhere
+		// Original sample commands
 		this.addCommand({
 			id: 'open-modal-simple',
 			name: 'Open modal (simple)',
@@ -27,50 +36,55 @@ export default class MyPlugin extends Plugin {
 				new SampleModal(this.app).open();
 			}
 		});
-		// This adds an editor command that can perform some operation on the current editor instance
+
 		this.addCommand({
 			id: 'replace-selected',
 			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
+			editorCallback: (editor: Editor, _ctx: MarkdownView | MarkdownFileInfo) => {
 				editor.replaceSelection('Sample editor command');
 			}
 		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
 		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		
+		console.log("Timeline plugin loaded");
 	}
 
 	onunload() {
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_TIMELINE);
+	}
+
+	async openTimelineView() {
+		const {workspace} = this.app;
+
+		// Check if view is already open
+		const leaves = workspace.getLeavesOfType(VIEW_TYPE_TIMELINE);
+		if (leaves.length > 0) {
+			// View already exists, reveal it
+			const leaf = leaves[0];
+			if (leaf) {
+				workspace.revealLeaf(leaf);
+			}
+			return;
+		}
+
+		// Create a new leaf in the right sidebar
+		const leaf = workspace.getRightLeaf(false);
+		if (!leaf) {
+			new Notice("Could not create Timeline view");
+			return;
+		}
+
+		// Open the Timeline view
+		await leaf.setViewState({
+			type: VIEW_TYPE_TIMELINE,
+			active: true
+		});
+
+		// Reveal the leaf
+		workspace.revealLeaf(leaf);
+		
+		console.log("Opened Timeline view");
 	}
 
 	async loadSettings() {
@@ -88,7 +102,7 @@ class SampleModal extends Modal {
 	}
 
 	onOpen() {
-		let {contentEl} = this;
+		const {contentEl} = this;
 		contentEl.setText('Woah!');
 	}
 
