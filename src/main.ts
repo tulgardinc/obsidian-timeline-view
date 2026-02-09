@@ -28,6 +28,30 @@ export default class MyPlugin extends Plugin {
 			}
 		});
 
+		// Add command to undo last timeline operation
+		this.addCommand({
+			id: 'timeline-undo',
+			name: 'Undo last timeline change',
+			callback: () => {
+				const view = this.app.workspace.getActiveViewOfType(TimelineView);
+				if (view) {
+					view.undo();
+				}
+			}
+		});
+
+		// Add command to redo last undone timeline operation
+		this.addCommand({
+			id: 'timeline-redo',
+			name: 'Redo last timeline change',
+			callback: () => {
+				const view = this.app.workspace.getActiveViewOfType(TimelineView);
+				if (view) {
+					view.redo();
+				}
+			}
+		});
+
 		// Original sample commands
 		this.addCommand({
 			id: 'open-modal-simple',

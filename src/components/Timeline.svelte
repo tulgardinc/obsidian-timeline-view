@@ -81,7 +81,7 @@
 	}
 </script>
 
-<div class="timeline-view">
+<div class="timeline-view" tabindex="-1">
 	<InfiniteCanvas onScaleChange={handleScaleChange}>
 		{#each items as item, index (item.file.path)}
 			<TimelineCard 

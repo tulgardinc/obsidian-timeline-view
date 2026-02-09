@@ -216,15 +216,18 @@
 			onResize(displayX, displayWidth, true);
 		}
 		
-		if (isMoving && onMove) {
-			// Signal move is finished - use local display state
-			onMove(displayX, snappedY(), true);
-		}
+		// Check if we have a layer change
+		const hasLayerChange = isMoving && targetLayer !== null && targetLayer !== layer;
 		
-		// Handle layer change if the layer was modified during drag
-		if (isMoving && targetLayer !== null && targetLayer !== layer && onLayerChange) {
+		if (hasLayerChange && onLayerChange) {
+			// Layer change handles both position AND layer atomically
+			// Safe to use non-null assertion because we checked targetLayer !== null above
 			console.log('Layer change:', { from: layer, to: targetLayer, x: displayX, width: displayWidth });
-			onLayerChange(targetLayer, displayX, displayWidth, true);
+			onLayerChange(targetLayer!, displayX, displayWidth, true);
+		} else if (isMoving && onMove) {
+			// Regular move (same layer) - only position changed
+			console.log('Move finished:', { x: displayX, y: snappedY() });
+			onMove(displayX, snappedY(), true);
 		}
 		
 		// Reset ghost state
