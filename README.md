@@ -88,3 +88,94 @@ If you have multiple URLs, you can also do:
 ## API Documentation
 
 See https://docs.obsidian.md
+
+---
+
+# Timeline Plugin Date Format
+
+## Supported Date Ranges
+
+The timeline plugin now supports **arbitrary date ranges** from **10 billion years BCE to 10 billion years CE** (and beyond).
+
+Unlike JavaScript's native Date object (limited to ±273,000 years), this plugin uses:
+- **Julian Day Number algorithms** for astronomical precision
+- **BigInt-safe day counts** for arbitrary year ranges
+- **Custom date arithmetic** without floating-point precision issues
+
+## Date Formats
+
+### Standard Format (current to ±10,000 years)
+```yaml
+date-start: 2024-03-15
+date-end: 2024-06-20
+```
+
+### Extended Format with Era Suffix (any year range)
+```yaml
+# With explicit era
+date-start: 5000000000 BCE-01-01
+date-end: 4000000000 BCE-12-31
+
+# Or use negative years (astronomical notation)
+date-start: -5000000000-01-01
+date-end: -4000000000-12-31
+
+# Far future
+date-start: 10000-01-01
+date-end: 10000-12-31
+```
+
+### Supported Era Suffixes
+- `BCE` / `BC` - Before Common Era (astronomical year 0 = 1 BCE)
+- `CE` / `AD` - Common Era (default, optional)
+
+## Year Numbering Systems
+
+### Historical Notation (displayed)
+- **1 BCE** → year 0 in calculations
+- **1 CE** → year 1 in calculations
+- No year 0 in historical notation
+
+### Astronomical Notation (internal)
+- **Year 0** exists (1 BCE in historical terms)
+- **Negative years** are BCE (year -1 = 2 BCE)
+- Used for all internal calculations
+
+## Example Frontmatter
+
+```yaml
+---
+timeline: true
+date-start: 4500000000-06-15
+date-end: 4400000000-12-01
+color: red
+---
+
+# Formation of the Earth
+
+This event occurred approximately 4.5 billion years ago.
+```
+
+## Scale-Based Display
+
+The timeline automatically adjusts date display based on zoom level:
+
+| Scale Level | Display Format | Example |
+|-------------|---------------|---------|
+| Days | DD/MM/YYYY | 15/03/2024 |
+| Weeks | DD/MM/YYYY | 15/03/2024 |
+| Months | MM/YYYY | 03/2024 |
+| Years | YYYY CE/BCE | 2024 CE |
+| Decades | 10-year notation | 2020s |
+| Centuries | century notation | 21st century |
+| Millennia | k-years | 3k BCE |
+| Millions | M-years | 4.5M BCE |
+| Billions | B-years | 4.5B BCE |
+
+## Technical Details
+
+- **Epoch**: 1970-01-01 (Unix epoch)
+- **Coordinate system**: Days from epoch as Numbers
+- **Max safe range**: ±20 billion years (3.65 trillion days)
+- **Marker generation**: Julian Day Number algorithm for all dates
+- **No floating-point precision issues** at extreme scales

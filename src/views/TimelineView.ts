@@ -4,6 +4,7 @@ import { mount, unmount } from "svelte";
 import { LayerManager, type LayerableItem, type LayerAssignment, type TimelineColor } from "../utils/LayerManager";
 import { TimelineHistoryManager, type TimelineState } from "../utils/TimelineHistoryManager";
 import { TimeScaleManager } from "../utils/TimeScaleManager";
+import { TimelineDate } from "../utils/TimelineDate";
 
 export const VIEW_TYPE_TIMELINE = "timeline-view";
 
@@ -23,8 +24,6 @@ export interface TimelineItem {
 	layer?: number;
 	color?: TimelineColor;
 }
-
-const START_DATE = new Date('1970-01-01');
 
 interface ExpectedFileState {
 	dateStart: string;
@@ -68,28 +67,13 @@ export class TimelineView extends ItemView {
 		return "calendar";
 	}
 
-	private parseDate(dateStr: string): Date | null {
-		// Expected format: yyyy-mm-dd
-		const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-		if (!match || !match[1] || !match[2] || !match[3]) return null;
-		
-		const year = parseInt(match[1]);
-		const month = parseInt(match[2]) - 1; // JS months are 0-indexed
-		const day = parseInt(match[3]);
-		
-		const date = new Date(year, month, day);
-		
-		// Validate the date is real
-		if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) {
-			return null;
-		}
-		
-		return date;
+	private parseDate(dateStr: string): TimelineDate | null {
+		// Use TimelineDate for arbitrary year range support (up to 10 billion years)
+		return TimelineDate.fromString(dateStr);
 	}
 
-	private daysBetween(start: Date, end: Date): number {
-		const msPerDay = 24 * 60 * 60 * 1000;
-		return Math.round((end.getTime() - start.getTime()) / msPerDay);
+	private daysBetween(start: TimelineDate, end: TimelineDate): number {
+		return end.getDaysFromEpoch() - start.getDaysFromEpoch();
 	}
 
 	async collectTimelineItems(): Promise<TimelineItem[]> {
@@ -160,11 +144,12 @@ export class TimelineView extends ItemView {
 		const items: TimelineItem[] = [];
 		for (const item of sortedItems) {
 			// Calculate x position (days from epoch start) using unified coordinate function
-			const daysFromStart = this.daysBetween(START_DATE, item.dateStart);
+			// TimelineDate stores days from epoch internally, so we can get it directly
+			const daysFromStart = item.dateStart.getDaysFromEpoch();
 			const x = TimeScaleManager.dayToWorldX(daysFromStart, this.timeScale);
 			
 			// Calculate width (duration in days) using unified coordinate function
-			const duration = this.daysBetween(item.dateStart, item.dateEnd);
+			const duration = item.dateEnd.getDaysFromEpoch() - item.dateStart.getDaysFromEpoch();
 			const width = Math.max(duration, 1) * this.timeScale;
 			
 			// Calculate Y position from assigned layer
@@ -177,8 +162,8 @@ export class TimelineView extends ItemView {
 				x,
 				y,
 				width,
-				dateStart: this.formatDate(item.dateStart),
-				dateEnd: this.formatDate(item.dateEnd),
+				dateStart: item.dateStart.toISOString(),
+				dateEnd: item.dateEnd.toISOString(),
 				layer,
 				color: item.color
 			});
@@ -187,13 +172,6 @@ export class TimelineView extends ItemView {
 		}
 		
 		return items;
-	}
-
-	private formatDate(date: Date): string {
-		const year = date.getFullYear();
-		const month = String(date.getMonth() + 1).padStart(2, '0');
-		const day = String(date.getDate()).padStart(2, '0');
-		return `${year}-${month}-${day}`;
 	}
 
 	private async batchUpdateLayers(assignments: LayerAssignment[]): Promise<void> {
@@ -242,16 +220,13 @@ export class TimelineView extends ItemView {
 	private pixelsToDate(pixels: number): string {
 		// Use unified coordinate function to convert world X to days
 		const days = Math.round(TimeScaleManager.worldXToDay(pixels, this.timeScale));
-		const msOffset = days * 24 * 60 * 60 * 1000;
-		const date = new Date(START_DATE.getTime() + msOffset);
+		// Create TimelineDate from days from epoch (handles arbitrary date ranges)
+		const date = TimelineDate.fromDaysFromEpoch(days);
 		
-		const year = date.getFullYear();
-		const month = String(date.getMonth() + 1).padStart(2, '0');
-		const day = String(date.getDate()).toString().padStart(2, '0');
+		console.log(`pixelsToDate: pixels=${pixels}, days=${days}, result=${date.toISOString()}`);
 		
-		console.log(`pixelsToDate: pixels=${pixels}, days=${days}, msOffset=${msOffset}, result=${year}-${month}-${day}`);
-		
-		return `${year}-${month}-${day}`;
+		// Return ISO format: YYYY-MM-DD (astronomical year numbering)
+		return date.toISOString();
 	}
 
 	private recalculateItemPositions(): void {
@@ -262,13 +237,13 @@ export class TimelineView extends ItemView {
 			// Calculate days from epoch for start date using unified coordinate function
 			const dateStart = this.parseDate(item.dateStart);
 			if (!dateStart) continue;
-			const daysFromStart = this.daysBetween(START_DATE, dateStart);
+			const daysFromStart = dateStart.getDaysFromEpoch();
 			const newX = TimeScaleManager.dayToWorldX(daysFromStart, this.timeScale);
 			
 			// Calculate duration and width
 			const dateEnd = this.parseDate(item.dateEnd);
 			if (!dateEnd) continue;
-			const duration = this.daysBetween(dateStart, dateEnd);
+			const duration = dateEnd.getDaysFromEpoch() - dateStart.getDaysFromEpoch();
 			const newWidth = Math.max(duration, 1) * this.timeScale;
 			
 			// Update item with new positions
@@ -937,12 +912,11 @@ export class TimelineView extends ItemView {
 				const item = this.timelineItems[itemIndex]!;
 				
 				// Calculate new position values from restored dates
-				const daysFromStart = this.daysBetween(START_DATE, this.parseDate(entry.previousState.dateStart)!);
+				const prevDateStart = this.parseDate(entry.previousState.dateStart)!;
+				const prevDateEnd = this.parseDate(entry.previousState.dateEnd)!;
+				const daysFromStart = prevDateStart.getDaysFromEpoch();
 				const newX = daysFromStart * this.timeScale;
-				const duration = this.daysBetween(
-					this.parseDate(entry.previousState.dateStart)!,
-					this.parseDate(entry.previousState.dateEnd)!
-				);
+				const duration = prevDateEnd.getDaysFromEpoch() - prevDateStart.getDaysFromEpoch();
 				const newWidth = Math.max(duration, 1) * this.timeScale;
 				const newY = LayerManager.layerToY(entry.previousState.layer);
 				
@@ -1022,12 +996,11 @@ export class TimelineView extends ItemView {
 				const item = this.timelineItems[itemIndex]!;
 				
 				// Calculate new position values from restored dates
-				const daysFromStart = this.daysBetween(START_DATE, this.parseDate(entry.newState.dateStart)!);
+				const newDateStart = this.parseDate(entry.newState.dateStart)!;
+				const newDateEnd = this.parseDate(entry.newState.dateEnd)!;
+				const daysFromStart = newDateStart.getDaysFromEpoch();
 				const newX = daysFromStart * this.timeScale;
-				const duration = this.daysBetween(
-					this.parseDate(entry.newState.dateStart)!,
-					this.parseDate(entry.newState.dateEnd)!
-				);
+				const duration = newDateEnd.getDaysFromEpoch() - newDateStart.getDaysFromEpoch();
 				const newWidth = Math.max(duration, 1) * this.timeScale;
 				const newY = LayerManager.layerToY(entry.newState.layer);
 				

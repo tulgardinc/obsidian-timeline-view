@@ -1,11 +1,12 @@
 import type { TFile } from "obsidian";
+import { TimelineDate } from "./TimelineDate";
 
 export type TimelineColor = 'red' | 'blue' | 'green' | 'yellow';
 
 export interface LayerableItem {
 	file: TFile;
-	dateStart: Date;
-	dateEnd: Date;
+	dateStart: TimelineDate;
+	dateEnd: TimelineDate;
 	layer?: number;
 	frontmatterLayer?: number;
 	color?: TimelineColor;
@@ -24,14 +25,15 @@ export class LayerManager {
 	 * Check if two date ranges overlap
 	 */
 	static rangesOverlap(
-		start1: Date,
-		end1: Date,
-		start2: Date,
-		end2: Date
+		start1: TimelineDate,
+		end1: TimelineDate,
+		start2: TimelineDate,
+		end2: TimelineDate
 	): boolean {
 		// Overlap occurs when one range starts before the other ends
 		// and ends after the other starts
-		return start1 <= end2 && end1 >= start2;
+		// Using TimelineDate comparison methods
+		return !start1.isAfter(end2) && !end1.isBefore(start2);
 	}
 
 	/**
@@ -39,8 +41,8 @@ export class LayerManager {
 	 */
 	static isLayerBusy(
 		targetLayer: number,
-		dateStart: Date,
-		dateEnd: Date,
+		dateStart: TimelineDate,
+		dateEnd: TimelineDate,
 		items: LayerableItem[],
 		excludeFile?: TFile
 	): boolean {
@@ -132,9 +134,13 @@ export class LayerManager {
 	 */
 	static sortByDate(items: LayerableItem[]): LayerableItem[] {
 		return [...items].sort((a, b) => {
-			const startDiff = a.dateStart.getTime() - b.dateStart.getTime();
-			if (startDiff !== 0) return startDiff;
-			return a.dateEnd.getTime() - b.dateEnd.getTime();
+			// Compare using TimelineDate comparison methods
+			if (a.dateStart.isBefore(b.dateStart)) return -1;
+			if (a.dateStart.isAfter(b.dateStart)) return 1;
+			// If start dates are equal, compare end dates
+			if (a.dateEnd.isBefore(b.dateEnd)) return -1;
+			if (a.dateEnd.isAfter(b.dateEnd)) return 1;
+			return 0;
 		});
 	}
 }

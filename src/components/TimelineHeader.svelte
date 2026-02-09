@@ -35,25 +35,31 @@
 
 	// Calculate current scale level based on effective density (timeScale * scale)
 	let scaleLevel = $derived(() => {
-		return TimeScaleManager.getScaleLevel(timeScale, scale);
+		const level = TimeScaleManager.getScaleLevel(timeScale, scale);
+		console.log(`[TimelineHeader] scaleLevel=${level}, timeScale=${timeScale}, scale=${scale}, effectiveDensity=${(timeScale * scale).toFixed(3)}`);
+		return level;
 	});
 
 	// Get current scale unit name (e.g., "Day", "Week", "Month", "Year", "Decade", etc.)
 	let currentUnitName = $derived(() => {
-		const info = TimeScaleManager.getScaleInfo(scaleLevel());
+		const level = scaleLevel();
+		const info = TimeScaleManager.getScaleInfo(level);
+		console.log(`[TimelineHeader] currentUnitName=${info.unitName} for level=${level}`);
 		return info.unitName;
 	});
 
 	// Calculate visible markers using the scale manager
 	let visibleMarkers = $derived(() => {
 		const level = scaleLevel();
-		return TimeScaleManager.getVisibleMarkers(
+		const markers = TimeScaleManager.getVisibleMarkers(
 			level,
 			timeScale,
 			scale,
 			translateX,
 			viewportWidth
 		);
+		console.log(`[TimelineHeader] visibleMarkers: ${markers.length} markers for level=${level}`);
+		return markers;
 	});
 
 	// Calculate hover date/position info using unified coordinate functions

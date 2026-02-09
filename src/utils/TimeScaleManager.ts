@@ -1,16 +1,18 @@
 // Time scale level definitions
-// Level 0: Days (small), Weeks/Monday (large)
-// Level 1: Weeks (small), Months (large)  
-// Level 2: Months (small), Years (large)
-// Level 3: Years (small), Decades (large)
-// Level 4: Decades (small), Centuries (large)
-// Level 5+: Centuries (small), Millennia (large), etc.
+// Level 0: Days (small), Month starts (large)
+// Level 1: Months (small), Years (large)
+// Level 2: Years (small), Decades (large)
+// Level 3: Decades (small), Centuries (large)
+// Level 4: Centuries (small), Millennia (large)
+// Level 5+: Millennia and larger units
+
+import { TimelineDate } from "./TimelineDate";
 
 export type ScaleLevel = 0 | 1 | 2 | 3 | 4 | number;
 
 export interface Marker {
 	screenX: number;
-	unitIndex: number; // Day number, week number, month number, etc.
+	unitIndex: number; // Day number, month number, year number, etc.
 	isLarge: boolean;
 	label?: string;
 }
@@ -22,10 +24,6 @@ export interface ScaleInfo {
 	pixelsPerUnit: number;
 }
 
-// Epoch start - all calculations based on days since this date
-const EPOCH = new Date('1970-01-01');
-const EPOCH_DAY_OF_WEEK = 4; // Thursday (0=Sunday, 4=Thursday)
-
 // Thresholds for switching scale levels (pixels per unit)
 // When markers would be closer than MIN_MARKER_SPACING pixels, switch to next level
 const MIN_MARKER_SPACING = 8;
@@ -34,33 +32,57 @@ const MAX_MARKER_SPACING = 100;
 // Base time scales (pixels per unit at scale=1) for each level
 const BASE_TIME_SCALES = [
 	1,      // Level 0: 1 px/day
-	7,      // Level 1: 7 px/week  
-	30,     // Level 2: ~30 px/month (avg)
-	365,    // Level 3: 365 px/year
-	3650,   // Level 4: 3650 px/decade
-	36500,  // Level 5: 36500 px/century
+	30,     // Level 1: ~30 px/month (avg)
+	365,    // Level 2: 365 px/year
+	3650,   // Level 3: 3650 px/decade
+	36500,  // Level 4: 36500 px/century
 ];
 
 export class TimeScaleManager {
 	/**
-	 * Determine the appropriate scale level based on effective visual density
-	 * Effective density = timeScale * scale (canvas zoom factor)
-	 * When small markers would be closer than MIN_MARKER_SPACING, go to next level
+	 * Determine the appropriate scale level based on consistent marker spacing.
+	 * We want markers to be at least MIN_MARKER_SPACING pixels apart at all levels.
+	 * 
+	 * Calculation: pixelsPerDay = timeScale * scale
+	 * For a given level, the spacing between markers is:
+	 *   spacing = pixelsPerDay * daysPerUnit
+	 * 
+	 * We find the first level where spacing >= MIN_MARKER_SPACING
 	 */
 	static getScaleLevel(timeScale: number, scale: number = 1): ScaleLevel {
-		// Calculate effective visual density combining both zoom factors
-		const effectiveDensity = timeScale * scale;
+		// Calculate pixels per day at current zoom
+		const pixelsPerDay = timeScale * scale;
 		
-		// Start from level 0 and find the appropriate level
-		for (let level = 0; level < 20; level++) {
-			const baseScale = this.getBaseScaleForLevel(level);
-			const pixelsPerSmallUnit = effectiveDensity * baseScale;
+		// Days per unit for each level
+		const daysPerUnit = [1, 30, 365, 3650, 36500];
+		
+		// Find the first level where marker spacing is at least MIN_MARKER_SPACING
+		for (let level = 0; level < daysPerUnit.length; level++) {
+			const daysInUnit = daysPerUnit[level]!;  // Safe: level < array length
+			const spacing = pixelsPerDay * daysInUnit;
 			
-			// If small markers would be at least MIN_MARKER_SPACING apart, this level is good
-			if (pixelsPerSmallUnit >= MIN_MARKER_SPACING) {
+			// If markers would be at least MIN_MARKER_SPACING apart, this level is good
+			if (spacing >= MIN_MARKER_SPACING) {
+				console.log(`[TimeScaleManager] Level ${level}: spacing=${spacing.toFixed(2)}px >= ${MIN_MARKER_SPACING}px`);
+				return level;
+			} else {
+				console.log(`[TimeScaleManager] Level ${level}: spacing=${spacing.toFixed(2)}px < ${MIN_MARKER_SPACING}px, trying next`);
+			}
+		}
+		
+		// For levels beyond the array, use the exponential pattern
+		// Level N: daysPerUnit = 365 * 10^(N-2) for N >= 2
+		for (let level = daysPerUnit.length; level < 20; level++) {
+			const daysInUnit = 365 * Math.pow(10, level - 2);
+			const spacing = pixelsPerDay * daysInUnit;
+			
+			if (spacing >= MIN_MARKER_SPACING) {
+				console.log(`[TimeScaleManager] Level ${level}: spacing=${spacing.toFixed(2)}px >= ${MIN_MARKER_SPACING}px`);
 				return level;
 			}
 		}
+		
+		console.log(`[TimeScaleManager] WARNING: Returning max level 20, no suitable level found`);
 		return 20; // Max level
 	}
 	
@@ -68,15 +90,15 @@ export class TimeScaleManager {
 	 * Get the base scale (pixels per unit at timeScale=1) for a given level
 	 */
 	static getBaseScaleForLevel(level: ScaleLevel): number {
-		if (level <= 5) {
+		if (level < BASE_TIME_SCALES.length) {
 			return BASE_TIME_SCALES[level] ?? 36500;
 		}
-		// For levels > 5: centuries, millennia, 10k years, etc.
-		// Level 5: century (100 years)
-		// Level 6: millennia (1000 years) = 365,000 px
-		// Level 7: 10k years = 3,650,000 px
-		// Pattern: 36500 * 10^(level-5)
-		return 36500 * Math.pow(10, level - 5);
+		// For levels >= 5: centuries, millennia, 10k years, etc.
+		// Level 4: century (100 years)
+		// Level 5: millennia (1000 years) = 365,000 px
+		// Level 6: 10k years = 3,650,000 px
+		// Pattern: 36500 * 10^(level-4)
+		return 36500 * Math.pow(10, level - 4);
 	}
 	
 	/**
@@ -84,11 +106,11 @@ export class TimeScaleManager {
 	 */
 	static getScaleInfo(level: ScaleLevel): ScaleInfo {
 		const unitNames = [
-			{ unit: 'day', large: 'week' },
-			{ unit: 'week', large: 'month' },
+			{ unit: 'day', large: 'month' },
 			{ unit: 'month', large: 'year' },
 			{ unit: 'year', large: 'decade' },
 			{ unit: 'decade', large: 'century' },
+			{ unit: 'century', large: 'millennium' },
 		];
 		
 		if (level < 5) {
@@ -111,11 +133,10 @@ export class TimeScaleManager {
 		}
 		
 		// For higher levels
-		const yearUnit = Math.pow(10, level - 3); // decade=10, century=100, millennia=1000, etc.
+		const yearUnit = Math.pow(10, level - 2); // century=100, millennia=1000, etc.
 		let unitLabel: string;
 		
-		if (yearUnit === 100) unitLabel = 'century';
-		else if (yearUnit === 1000) unitLabel = 'millennium';
+		if (yearUnit === 1000) unitLabel = 'millennium';
 		else if (yearUnit < 1000000) unitLabel = `${yearUnit / 1000}k years`;
 		else if (yearUnit < 1000000000) unitLabel = `${yearUnit / 1000000}M years`;
 		else unitLabel = `${yearUnit / 1000000000}B years`;
@@ -123,8 +144,7 @@ export class TimeScaleManager {
 		const largeYearUnit = yearUnit * 10;
 		let largeUnitLabel: string;
 		
-		if (largeYearUnit === 1000) largeUnitLabel = 'millennium';
-		else if (largeYearUnit < 1000000) largeUnitLabel = `${largeYearUnit / 1000}k years`;
+		if (largeYearUnit < 1000000) largeUnitLabel = `${largeYearUnit / 1000}k years`;
 		else if (largeYearUnit < 1000000000) largeUnitLabel = `${largeYearUnit / 1000000}M years`;
 		else largeUnitLabel = `${largeYearUnit / 1000000000}B years`;
 		
@@ -157,22 +177,30 @@ export class TimeScaleManager {
 		const startDay = Math.floor(worldStartX / timeScale);
 		const endDay = Math.ceil(worldEndX / timeScale);
 		
+		console.log(`[getVisibleMarkers] Level=${level}, timeScale=${timeScale}, scale=${scale}, viewport=${viewportWidth}`);
+		console.log(`[getVisibleMarkers] Days range: ${startDay} to ${endDay} (${endDay - startDay} days)`);
+		
+		let result: Marker[];
 		switch (level) {
 			case 0:
-				return this.getDayMarkers(startDay, endDay, timeScale, scale, translateX, viewportWidth);
+				result = this.getDayMarkers(startDay, endDay, timeScale, scale, translateX, viewportWidth);
+				break;
 			case 1:
-				return this.getWeekMarkers(startDay, endDay, timeScale, scale, translateX, viewportWidth);
+				result = this.getMonthMarkers(startDay, endDay, timeScale, scale, translateX, viewportWidth);
+				break;
 			case 2:
-				return this.getMonthMarkers(startDay, endDay, timeScale, scale, translateX, viewportWidth);
-			case 3:
-				return this.getYearMarkers(startDay, endDay, timeScale, scale, translateX, viewportWidth);
+				result = this.getYearMarkers(startDay, endDay, timeScale, scale, translateX, viewportWidth);
+				break;
 			default:
-				return this.getLargeUnitMarkers(level, startDay, endDay, timeScale, scale, translateX, viewportWidth);
+				result = this.getLargeUnitMarkers(level, startDay, endDay, timeScale, scale, translateX, viewportWidth);
 		}
+		
+		console.log(`[getVisibleMarkers] Generated ${result.length} markers for level ${level}`);
+		return result;
 	}
 	
 	/**
-	 * Level 0: Day markers, Mondays as large markers
+	 * Level 0: Day markers, month starts as large markers
 	 */
 	private static getDayMarkers(
 		startDay: number,
@@ -189,49 +217,13 @@ export class TimeScaleManager {
 			const screenX = worldX * scale + translateX;
 			
 			if (screenX >= -1 && screenX <= viewportWidth + 1) {
-				// Monday is when (day + 4) % 7 === 0 (since 1970-01-01 was Thursday)
-				const isMonday = (day + 4) % 7 === 0;
-				markers.push({
-					screenX,
-					unitIndex: day,
-					isLarge: isMonday
-				});
-			}
-		}
-		
-		return markers;
-	}
-	
-	/**
-	 * Level 1: Week markers, month starts as large markers
-	 */
-	private static getWeekMarkers(
-		startDay: number,
-		endDay: number,
-		timeScale: number,
-		scale: number,
-		translateX: number,
-		viewportWidth: number
-	): Marker[] {
-		const markers: Marker[] = [];
-		
-		// Find first week start (Monday) in range
-		const startWeek = Math.floor((startDay + 4) / 7);
-		const endWeek = Math.ceil((endDay + 4) / 7);
-		
-		for (let week = startWeek; week <= endWeek; week++) {
-			const day = week * 7 - 4; // Convert week number to Monday's day number
-			const worldX = day * timeScale;
-			const screenX = worldX * scale + translateX;
-			
-			if (screenX >= -1 && screenX <= viewportWidth + 1) {
-				// Check if this week contains a month start
-				const date = new Date(EPOCH.getTime() + day * 24 * 60 * 60 * 1000);
-				const isMonthStart = date.getDate() <= 7; // First week of month
+				// Check if this day is the first day of a month
+				const date = TimelineDate.fromDaysFromEpoch(day);
+				const isMonthStart = date.getDay() === 1;
 				
 				markers.push({
 					screenX,
-					unitIndex: week,
+					unitIndex: day,
 					isLarge: isMonthStart
 				});
 			}
@@ -241,7 +233,7 @@ export class TimeScaleManager {
 	}
 	
 	/**
-	 * Level 2: Month markers, year starts as large markers
+	 * Level 1: Month markers, year starts as large markers
 	 */
 	private static getMonthMarkers(
 		startDay: number,
@@ -253,52 +245,70 @@ export class TimeScaleManager {
 	): Marker[] {
 		const markers: Marker[] = [];
 		
-		// Get start and end dates
-		const startDate = new Date(EPOCH.getTime() + startDay * 24 * 60 * 60 * 1000);
-		const endDate = new Date(EPOCH.getTime() + endDay * 24 * 60 * 60 * 1000);
+		// Get start and end dates using TimelineDate
+		const startDate = TimelineDate.fromDaysFromEpoch(startDay);
+		const endDate = TimelineDate.fromDaysFromEpoch(endDay);
+		
+		console.log(`[getMonthMarkers] startDay=${startDay}, endDay=${endDay}, viewport=${viewportWidth}`);
+		console.log(`[getMonthMarkers] startDate: year=${startDate.getYear()}, month=${startDate.getMonth()}`);
+		console.log(`[getMonthMarkers] endDate: year=${endDate.getYear()}, month=${endDate.getMonth()}`);
 		
 		// Start from the first day of the start month
-		const currentYear = startDate.getFullYear();
-		const currentMonth = startDate.getMonth();
+		let currentYear = startDate.getYear();
+		let currentMonth = startDate.getMonth();
 		
 		// Iterate through months
-		let year = currentYear;
-		let month = currentMonth;
+		let safetyCounter = 0;
+		const maxIterations = 10000; // Prevent infinite loops at extreme scales
 		
-		while (true) {
-			const monthDate = new Date(year, month, 1);
-			const day = Math.floor((monthDate.getTime() - EPOCH.getTime()) / (24 * 60 * 60 * 1000));
+		while (safetyCounter < maxIterations) {
+			safetyCounter++;
 			
-			if (day > endDay) break;
+			// Calculate day number for first day of current month/year
+			const monthStr = String(currentMonth).padStart(2, '0');
+			const dateStr = `${currentYear}-${monthStr}-01`;
+			const monthDate = TimelineDate.fromString(dateStr);
+			
+			if (!monthDate) {
+				console.log(`[getMonthMarkers] Failed to parse date: ${dateStr}`);
+				break;
+			}
+			
+			const day = monthDate.getDaysFromEpoch();
+			
+			if (day > endDay) {
+				console.log(`[getMonthMarkers] Day ${day} > endDay ${endDay}, stopping`);
+				break;
+			}
 			
 			const worldX = day * timeScale;
 			const screenX = worldX * scale + translateX;
 			
-			if (screenX >= -1 && screenX <= viewportWidth + 1) {
-				const isYearStart = month === 0;
+			const inViewport = screenX >= -1 && screenX <= viewportWidth + 1;
+			
+			if (inViewport) {
+				const isYearStart = currentMonth === 1;
 				markers.push({
 					screenX,
-					unitIndex: year * 12 + month,
+					unitIndex: currentYear * 12 + currentMonth,
 					isLarge: isYearStart
 				});
 			}
 			
 			// Move to next month
-			month++;
-			if (month > 11) {
-				month = 0;
-				year++;
+			currentMonth++;
+			if (currentMonth > 12) {
+				currentMonth = 1;
+				currentYear++;
 			}
-			
-			// Safety check
-			if (year > endDate.getFullYear() + 1) break;
 		}
 		
+		console.log(`[getMonthMarkers] Generated ${markers.length} month markers after ${safetyCounter} iterations`);
 		return markers;
 	}
 	
 	/**
-	 * Level 3: Year markers, decade starts as large markers
+	 * Level 2: Year markers, decade starts as large markers
 	 */
 	private static getYearMarkers(
 		startDay: number,
@@ -310,19 +320,40 @@ export class TimeScaleManager {
 	): Marker[] {
 		const markers: Marker[] = [];
 		
-		const startDate = new Date(EPOCH.getTime() + startDay * 24 * 60 * 60 * 1000);
-		const endDate = new Date(EPOCH.getTime() + endDay * 24 * 60 * 60 * 1000);
+		const startDate = TimelineDate.fromDaysFromEpoch(startDay);
+		const endDate = TimelineDate.fromDaysFromEpoch(endDay);
 		
-		let year = startDate.getFullYear();
+		console.log(`[getYearMarkers] startDay=${startDay}, endDay=${endDay}, startYear=${startDate.getYear()}, endYear=${endDate.getYear()}`);
 		
-		while (year <= endDate.getFullYear() + 1) {
-			const yearDate = new Date(year, 0, 1);
-			const day = Math.floor((yearDate.getTime() - EPOCH.getTime()) / (24 * 60 * 60 * 1000));
+		let year = startDate.getYear();
+		
+		let safetyCounter = 0;
+		const maxIterations = 10000;
+		
+		while (safetyCounter < maxIterations) {
+			safetyCounter++;
+			
+			if (year > endDate.getYear() + 1) {
+				console.log(`[getYearMarkers] Year ${year} > ${endDate.getYear() + 1}, stopping`);
+				break;
+			}
+			
+			// Create date for January 1st of this year
+			const yearDate = TimelineDate.fromString(`${year}-01-01`);
+			if (!yearDate) {
+				console.log(`[getYearMarkers] Failed to parse year: ${year}`);
+				year++;
+				continue;
+			}
+			
+			const day = yearDate.getDaysFromEpoch();
 			
 			const worldX = day * timeScale;
 			const screenX = worldX * scale + translateX;
 			
-			if (screenX >= -1 && screenX <= viewportWidth + 1) {
+			const inViewport = screenX >= -1 && screenX <= viewportWidth + 1;
+			
+			if (inViewport) {
 				const isDecadeStart = year % 10 === 0;
 				markers.push({
 					screenX,
@@ -334,11 +365,12 @@ export class TimeScaleManager {
 			year++;
 		}
 		
+		console.log(`[getYearMarkers] Generated ${markers.length} year markers after ${safetyCounter} iterations`);
 		return markers;
 	}
 	
 	/**
-	 * Level 4+: Decades, centuries, millennia, etc.
+	 * Level 3+: Decades, centuries, millennia, etc.
 	 */
 	private static getLargeUnitMarkers(
 		level: ScaleLevel,
@@ -352,26 +384,42 @@ export class TimeScaleManager {
 		const markers: Marker[] = [];
 		
 		// Years per unit at this level
-		const yearsPerUnit = Math.pow(10, level - 3); // 10, 100, 1000, 10000, etc.
+		const yearsPerUnit = Math.pow(10, level - 2); // 10, 100, 1000, 10000, etc.
 		const yearsPerLargeUnit = yearsPerUnit * 10;
 		
-		const startDate = new Date(EPOCH.getTime() + startDay * 24 * 60 * 60 * 1000);
-		const endDate = new Date(EPOCH.getTime() + endDay * 24 * 60 * 60 * 1000);
+		const startDate = TimelineDate.fromDaysFromEpoch(startDay);
+		const endDate = TimelineDate.fromDaysFromEpoch(endDay);
 		
 		// Find the first unit boundary
-		const startYear = startDate.getFullYear();
+		const startYear = startDate.getYear();
 		const firstUnit = Math.floor(startYear / yearsPerUnit) * yearsPerUnit;
 		
 		let currentUnit = firstUnit;
 		
-		while (currentUnit <= endDate.getFullYear() + yearsPerUnit) {
-			const unitDate = new Date(currentUnit, 0, 1);
-			const day = Math.floor((unitDate.getTime() - EPOCH.getTime()) / (24 * 60 * 60 * 1000));
+		let safetyCounter = 0;
+		const maxIterations = 10000;
+		
+		while (safetyCounter < maxIterations) {
+			safetyCounter++;
+			
+			if (currentUnit > endDate.getYear() + yearsPerUnit) break;
+			
+			// Create date for start of this unit
+			const unitDate = TimelineDate.fromString(`${currentUnit}-01-01`);
+			if (!unitDate) {
+				console.log(`[getLargeUnitMarkers] Failed to parse year: ${currentUnit}`);
+				currentUnit += yearsPerUnit;
+				continue;
+			}
+			
+			const day = unitDate.getDaysFromEpoch();
 			
 			const worldX = day * timeScale;
 			const screenX = worldX * scale + translateX;
 			
-			if (screenX >= -1 && screenX <= viewportWidth + 1) {
+			const inViewport = screenX >= -1 && screenX <= viewportWidth + 1;
+			
+			if (inViewport) {
 				const isLargeUnitStart = currentUnit % yearsPerLargeUnit === 0;
 				markers.push({
 					screenX,
@@ -383,54 +431,17 @@ export class TimeScaleManager {
 			currentUnit += yearsPerUnit;
 		}
 		
+		console.log(`[getLargeUnitMarkers] Generated ${markers.length} markers for level ${level} after ${safetyCounter} iterations`);
 		return markers;
 	}
 	
 	/**
-	 * Format a date for display at the given scale level
+	 * Format a day number for display at the given scale level
+	 * Uses TimelineDate for arbitrary date range support
 	 */
 	static formatDateForLevel(day: number, level: ScaleLevel): string {
-		const date = new Date(EPOCH.getTime() + day * 24 * 60 * 60 * 1000);
-		const year = date.getFullYear();
-		
-		switch (level) {
-			case 0: // Days
-			case 1: // Weeks
-				// Full date: dd/mm/yyyy
-				const day_num = date.getDate().toString().padStart(2, '0');
-				const month = (date.getMonth() + 1).toString().padStart(2, '0');
-				return `${day_num}/${month}/${Math.abs(year)}${year < 0 ? ' BC' : ''}`;
-				
-			case 2: // Months
-				// mm/yyyy
-				const month_name = (date.getMonth() + 1).toString().padStart(2, '0');
-				return `${month_name}/${Math.abs(year)}${year < 0 ? ' BC' : ''}`;
-				
-			case 3: // Years
-				// Year with BC/AD
-				if (year === 0) return '1 AD';
-				return `${Math.abs(year)}${year < 0 ? ' BC' : ' AD'}`;
-				
-			default: // Decades, centuries, etc.
-				const yearsPerUnit = Math.pow(10, level - 3);
-				const unitStart = Math.floor(year / yearsPerUnit) * yearsPerUnit;
-				
-				// Format large numbers with K, M, B suffixes
-				const absYear = Math.abs(unitStart);
-				let yearStr: string;
-				
-				if (absYear >= 1000000000) {
-					yearStr = `${(absYear / 1000000000).toFixed(absYear % 1000000000 === 0 ? 0 : 1)}B`;
-				} else if (absYear >= 1000000) {
-					yearStr = `${(absYear / 1000000).toFixed(absYear % 1000000 === 0 ? 0 : 1)}M`;
-				} else if (absYear >= 1000) {
-					yearStr = `${(absYear / 1000).toFixed(absYear % 1000 === 0 ? 0 : 1)}K`;
-				} else {
-					yearStr = absYear.toString();
-				}
-				
-				return `${yearStr}${unitStart < 0 ? ' BC' : ''}`;
-		}
+		const date = TimelineDate.fromDaysFromEpoch(day);
+		return date.formatForLevel(level);
 	}
 	
 	/**
@@ -446,35 +457,27 @@ export class TimeScaleManager {
 	 * This ensures resizing snaps to the actual small marker positions visible in the timeline
 	 */
 	static snapToNearestMarker(day: number, level: ScaleLevel): number {
-		const date = new Date(EPOCH.getTime() + day * 24 * 60 * 60 * 1000);
+		const date = TimelineDate.fromDaysFromEpoch(day);
+		const ymd = date.getYMD();
 		
 		switch (level) {
 			case 0: // Days - snap to nearest day (every day is a marker)
 				return Math.round(day);
 				
-			case 1: // Weeks - snap to nearest Monday (week start)
-				// Find the nearest Monday
-				// Monday is when (day + 4) % 7 === 0
-				const dayOfWeek = (day + 4) % 7;
-				return day - dayOfWeek;
+			case 1: // Months - snap to nearest month start
+				// Create date for first day of this month
+				const monthStart = TimelineDate.fromString(`${ymd.year}-${String(ymd.month).padStart(2, '0')}-01`);
+				return monthStart?.getDaysFromEpoch() ?? day;
 				
-			case 2: // Months - snap to nearest month start
-				const year2 = date.getFullYear();
-				const month2 = date.getMonth();
-				const monthStart2 = new Date(year2, month2, 1);
-				return Math.floor((monthStart2.getTime() - EPOCH.getTime()) / (24 * 60 * 60 * 1000));
-				
-			case 3: // Years - snap to nearest year start (January 1)
-				const year3 = date.getFullYear();
-				const yearStart3 = new Date(year3, 0, 1);
-				return Math.floor((yearStart3.getTime() - EPOCH.getTime()) / (24 * 60 * 60 * 1000));
+			case 2: // Years - snap to nearest year start (January 1)
+				const yearStart = TimelineDate.fromString(`${ymd.year}-01-01`);
+				return yearStart?.getDaysFromEpoch() ?? day;
 				
 			default: // Decades, centuries, etc. - snap to unit start
-				const yearsPerUnit = Math.pow(10, level - 3);
-				const year = date.getFullYear();
-				const unitStartYear = Math.floor(year / yearsPerUnit) * yearsPerUnit;
-				const unitStart = new Date(unitStartYear, 0, 1);
-				return Math.floor((unitStart.getTime() - EPOCH.getTime()) / (24 * 60 * 60 * 1000));
+				const yearsPerUnit = Math.pow(10, level - 2);
+				const unitStartYear = Math.floor(ymd.year / yearsPerUnit) * yearsPerUnit;
+				const unitStart = TimelineDate.fromString(`${unitStartYear}-01-01`);
+				return unitStart?.getDaysFromEpoch() ?? day;
 		}
 	}
 	
