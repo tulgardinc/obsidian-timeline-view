@@ -34,11 +34,19 @@ interface ExpectedFileState {
 }
 
 export class TimelineView extends ItemView {
-	private component: { $set?: (props: Record<string, unknown>) => void; refreshItems?: (items: TimelineItem[]) => void } | null = null;
+	private component: { 
+		refreshItems?: (items: TimelineItem[]) => void;
+		setSelection?: (index: number | null, cardData: { startX: number; endX: number; startDate: string; endDate: string; title: string } | null) => void;
+		[key: string]: unknown;
+	} | null = null;
 	timelineItems: TimelineItem[] = [];
 	private historyManager: TimelineHistoryManager;
 	private expectedFileStates = new Map<string, ExpectedFileState>(); // Track expected states to filter our own changes
 	private keydownHandler: ((event: KeyboardEvent) => void) | null = null; // Store for cleanup
+
+	// Selection state - persists across view updates
+	private selectedIndex: number | null = null;
+	private selectedCardData: { startX: number; endX: number; startDate: string; endDate: string; title: string } | null = null;
 
 	constructor(leaf: WorkspaceLeaf) {
 		super(leaf);
@@ -624,6 +632,91 @@ export class TimelineView extends ItemView {
 		}
 	}
 
+	/**
+	 * Toggle selection of a card (select if not selected, deselect if already selected)
+	 */
+	private toggleSelection(index: number): void {
+		console.log('TimelineView: toggleSelection CALLED for index:', index, 'current:', this.selectedIndex);
+		
+		// If clicking the same card, deselect it (toggle off)
+		if (this.selectedIndex === index) {
+			console.log('TimelineView: Deselecting (toggle off)');
+			this.selectedIndex = null;
+			this.selectedCardData = null;
+		} else {
+			// Select the new card
+			console.log('TimelineView: Selecting new card');
+			this.selectedIndex = index;
+			
+			// Calculate and store boundary data for the selected card
+			if (index >= 0 && index < this.timelineItems.length) {
+				const item = this.timelineItems[index]!;
+				const PIXELS_PER_DAY = 10;
+				const START_DATE = new Date('1970-01-01');
+				
+				// Calculate dates from positions
+				const daysStart = Math.round(item.x / PIXELS_PER_DAY);
+				const dateStart = new Date(START_DATE.getTime() + daysStart * 24 * 60 * 60 * 1000);
+				const dayStart = dateStart.getDate().toString().padStart(2, '0');
+				const monthStart = (dateStart.getMonth() + 1).toString().padStart(2, '0');
+				const yearStart = dateStart.getFullYear();
+				
+				const daysEnd = Math.round((item.x + item.width) / PIXELS_PER_DAY);
+				const dateEnd = new Date(START_DATE.getTime() + daysEnd * 24 * 60 * 60 * 1000);
+				const dayEnd = dateEnd.getDate().toString().padStart(2, '0');
+				const monthEnd = (dateEnd.getMonth() + 1).toString().padStart(2, '0');
+				const yearEnd = dateEnd.getFullYear();
+				
+				this.selectedCardData = {
+					startX: item.x,
+					endX: item.x + item.width,
+					startDate: `${dayStart}/${monthStart}/${yearStart}`,
+					endDate: `${dayEnd}/${monthEnd}/${yearEnd}`,
+					title: item.title
+				};
+				console.log('TimelineView: selectedCardData calculated:', this.selectedCardData);
+			} else {
+				console.log('TimelineView: ERROR - Invalid index:', index, 'items length:', this.timelineItems.length);
+			}
+		}
+		
+		console.log('TimelineView: About to call updateSelectionInComponent');
+		// Update the component with new selection state
+		this.updateSelectionInComponent();
+		console.log('TimelineView: toggleSelection COMPLETE');
+	}
+
+	/**
+	 * Clear selection (deselect all cards)
+	 */
+	private clearSelection(): void {
+		this.selectedIndex = null;
+		this.selectedCardData = null;
+		this.updateSelectionInComponent();
+	}
+
+	/**
+	 * Update the Svelte component with current selection state
+	 */
+	private updateSelectionInComponent(): void {
+		console.log('TimelineView: updateSelectionInComponent CALLED');
+		console.log('TimelineView: this.component exists?', !!this.component);
+		
+		if (this.component) {
+			console.log('TimelineView: this.component.setSelection exists?', !!this.component.setSelection);
+			if (this.component.setSelection) {
+				console.log('TimelineView: Calling setSelection with:', this.selectedIndex, this.selectedCardData);
+				this.component.setSelection(this.selectedIndex, this.selectedCardData);
+				console.log('TimelineView: setSelection call COMPLETE');
+			} else {
+				console.error('TimelineView: ERROR - setSelection method not found on component!');
+				console.log('TimelineView: Available methods on component:', Object.keys(this.component));
+			}
+		} else {
+			console.error('TimelineView: ERROR - Component is null!');
+		}
+	}
+
 	async render() {
 		// Wait for DOM to be ready
 		await new Promise(resolve => requestAnimationFrame(resolve));
@@ -639,12 +732,14 @@ export class TimelineView extends ItemView {
 		// Collect timeline items with dates
 		this.timelineItems = await this.collectTimelineItems();
 
-		// Mount the Svelte component with items
+		// Mount the Svelte component with items and selection state
 		try {
 			this.component = mount(Timeline, {
 				target: this.contentEl,
 				props: {
 					items: this.timelineItems,
+					selectedIndex: this.selectedIndex,
+					selectedCard: this.selectedCardData,
 					onItemResize: (index: number, newX: number, newWidth: number) => {
 						this.updateItemDates(index, newX, newWidth);
 					},
@@ -655,7 +750,12 @@ export class TimelineView extends ItemView {
 						this.updateItemLayer(index, newLayer, newX, newWidth);
 					},
 					onItemClick: (index: number) => {
+						// Toggle selection and open file
+						this.toggleSelection(index);
 						this.openFile(index);
+					},
+					onCanvasClick: () => {
+						this.clearSelection();
 					}
 				}
 			});

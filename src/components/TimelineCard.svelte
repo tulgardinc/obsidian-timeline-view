@@ -10,16 +10,18 @@
 		translateX: number;
 		layer: number;
 		color?: 'red' | 'blue' | 'green' | 'yellow';
+		isSelected?: boolean;
 		onResize?: (newX: number, newWidth: number, finished: boolean) => void;
 		onMove?: (newX: number, newY: number, finished: boolean) => void;
 		onLayerChange?: (newLayer: number, newX: number, newWidth: number, finished: boolean) => void;
 		onClick?: () => void;
 	}
 
-	let { x, y, width, title, scale, translateX, layer, color, onResize, onMove, onLayerChange, onClick }: Props = $props();
+	let { x, y, width, title, scale, translateX, layer, color, isSelected = false, onResize, onMove, onLayerChange, onClick }: Props = $props();
 
 	const GRID_SPACING = 50;
 	const PIXELS_PER_DAY = 10;
+	const START_DATE = new Date('1970-01-01');
 	const EDGE_ZONE = 8; // px from edge to trigger resize handle
 	const MIN_WIDTH_DAYS = 1;
 	const MIN_WIDTH_PX = MIN_WIDTH_DAYS * PIXELS_PER_DAY;
@@ -48,7 +50,7 @@
 	let isMoving = $state(false);
 	let isMouseDown = $state(false);
 	let resizeEdge: 'left' | 'right' | null = $state(null);
-	let canMove = $state(false);
+	let canMove = $state(true);
 	let startMouseX = $state(0);
 	let startMouseY = $state(0);
 	let dragStartX = $state(0);
@@ -70,6 +72,16 @@
 	// Calculate Y position from layer
 	function layerToY(layerNum: number): number {
 		return -layerNum * GRID_SPACING;
+	}
+
+	// Calculate date from X position (days since START_DATE)
+	function xToDate(xPos: number): string {
+		const days = Math.round(xPos / PIXELS_PER_DAY);
+		const date = new Date(START_DATE.getTime() + days * 24 * 60 * 60 * 1000);
+		const day = date.getDate().toString().padStart(2, '0');
+		const month = (date.getMonth() + 1).toString().padStart(2, '0');
+		const year = date.getFullYear();
+		return `${day}/${month}/${year}`;
 	}
 
 	function handleMouseMove(event: MouseEvent) {
@@ -207,7 +219,6 @@
 	function handleMouseUp() {
 		// Check if this was a click (mouse down but never started moving)
 		if (isMouseDown && !isMoving && !dragThresholdMet && onClick) {
-			console.log('Click detected - opening file');
 			onClick();
 		}
 		
@@ -238,7 +249,7 @@
 		isMoving = false;
 		isMouseDown = false;
 		resizeEdge = null;
-		canMove = false;
+		canMove = true;
 		dragThresholdMet = false;
 		
 		// Remove global listeners
@@ -274,6 +285,11 @@
 		}
 	}
 
+	function handleClick(event: MouseEvent) {
+		// Stop click from bubbling to canvas (prevents deselection)
+		event.stopPropagation();
+	}
+
 	onMount(() => {
 		return () => {
 			// Cleanup
@@ -296,6 +312,9 @@
 	</div>
 {/if}
 
+<!-- Debug: Log render-time isSelected value -->
+{console.log('TimelineCard RENDER:', title, 'isSelected:', isSelected)}
+
 <div
 	class="timeline-card"
 	class:color-red={color === 'red'}
@@ -306,12 +325,14 @@
 	class:moving={isMoving}
 	class:resize-left={resizeEdge === 'left'}
 	class:resize-right={resizeEdge === 'right'}
+	class:selected={isSelected}
 
 	style="left: {displayX}px; top: {snappedY()}px; width: {displayWidth}px;"
 	bind:this={cardRef}
 	onmousemove={handleCardMouseMove}
 	onmouseleave={handleCardMouseLeave}
 	onmousedown={handleMouseDown}
+	onclick={handleClick}
 	role="button"
 	tabindex="0"
 	aria-label="Timeline card: {title}"
@@ -406,6 +427,12 @@
 		z-index: 5;
 		pointer-events: none;
 		box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+	}
+
+	.timeline-card.selected {
+		border: 2px solid var(--interactive-accent);
+		box-shadow: 0 0 0 2px var(--interactive-accent-hover);
+		z-index: 30;
 	}
 
 	.timeline-card.resize-left,

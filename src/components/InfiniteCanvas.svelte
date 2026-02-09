@@ -3,6 +3,27 @@
 	import GridLines from "./GridLines.svelte";
 	import TimelineHeader from "./TimelineHeader.svelte";
 
+	interface CardHoverData {
+		startX: number;
+		endX: number;
+		startDate: string;
+		endDate: string;
+		title: string;
+	}
+
+	const PIXELS_PER_DAY = 10;
+
+	// Calculate cursor screen X position for the dashed line
+	let cursorScreenX = $derived(() => {
+		if (mouseX === null || !isHovering) return null;
+		
+		// Convert mouse X to world coordinates
+		const worldX = (mouseX - translateX) / scale;
+		// Convert back to screen coordinates
+		const screenX = worldX * scale + translateX;
+		return screenX;
+	});
+
 	// Transform state
 	let scale = $state(1);
 	let translateX = $state(0);
@@ -33,9 +54,11 @@
 	interface Props {
 		children: import('svelte').Snippet;
 		onScaleChange?: (scale: number, translateX: number) => void;
+		selectedCard?: CardHoverData | null;
+		onCanvasClick?: () => void;
 	}
 
-	let { children, onScaleChange }: Props = $props();
+	let { children, onScaleChange, selectedCard = null, onCanvasClick }: Props = $props();
 
 	// Notify parent of scale changes
 	$effect(() => {
@@ -282,10 +305,7 @@
 	onmouseup={handleMouseUp}
 	onmouseleave={handleMouseLeave}
 	onmouseenter={handleMouseEnter}
-	ontouchstart={handleTouchStart}
-	ontouchmove={handleTouchMove}
-	ontouchend={handleTouchEnd}
-	ontouchcancel={handleTouchEnd}
+	onclick={onCanvasClick}
 >
 	<TimelineHeader
 		scale={scale}
@@ -293,7 +313,34 @@
 		viewportWidth={viewportWidth}
 		mouseX={mouseX}
 		isHovering={isHovering}
+		selectedCard={selectedCard}
 	/>
+	
+	<!-- Dashed cursor line spanning full viewport height -->
+	{#if cursorScreenX() !== null && selectedCard === null}
+		{@const screenX = cursorScreenX()}
+		{#if screenX !== null}
+			<div
+				class="cursor-line"
+				style="left: {screenX}px;"
+			></div>
+		{/if}
+	{/if}
+	
+	<!-- Card boundary lines extending up to timeline for selected card -->
+	{#if selectedCard !== null}
+		{@const startScreenX = selectedCard.startX * scale + translateX}
+		{@const endScreenX = selectedCard.endX * scale + translateX}
+		<div
+			class="card-boundary-line start"
+			style="left: {startScreenX}px;"
+		></div>
+		<div
+			class="card-boundary-line end"
+			style="left: {endScreenX}px;"
+		></div>
+	{/if}
+	
 	<GridLines
 		scale={scale}
 		translateX={translateX}
@@ -374,5 +421,43 @@
 
 	button:hover {
 		opacity: 0.9;
+	}
+
+	.cursor-line {
+		position: absolute;
+		top: 40px; /* Start below the timeline header */
+		bottom: 0;
+		width: 2px;
+		border-left: 2px solid transparent;
+		border-image: repeating-linear-gradient(
+			to bottom,
+			var(--interactive-accent) 0px,
+			var(--interactive-accent) 8px,
+			transparent 8px,
+			transparent 14px
+		) 1;
+		opacity: 0.4;
+		pointer-events: none;
+		z-index: 1;
+		transform: translateX(-1px);
+	}
+
+	.card-boundary-line {
+		position: absolute;
+		top: 40px; /* Start below the timeline header */
+		bottom: 0;
+		width: 2px;
+		border-left: 2px solid transparent;
+		border-image: repeating-linear-gradient(
+			to bottom,
+			var(--text-normal) 0px,
+			var(--text-normal) 8px,
+			transparent 8px,
+			transparent 14px
+		) 1;
+		opacity: 0.4;
+		pointer-events: none;
+		z-index: 1;
+		transform: translateX(-1px);
 	}
 </style>
