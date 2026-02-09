@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { TimelineItem } from "../views/TimelineView";
+	import type { TimelineItem } from "../stores/timelineStore";
 	import InfiniteCanvas from "./InfiniteCanvas.svelte";
 	import TimelineCard from "./TimelineCard.svelte";
 
@@ -43,29 +43,16 @@
 	
 	// Export a function that TimelineView can call to update selection
 	export function setSelection(index: number | null, cardData: CardHoverData | null) {
-		console.log('Timeline.svelte: setSelection CALLED with index:', index);
 		selectedIndex = index;
 		selectedCard = cardData;
-		console.log('Timeline.svelte: setSelection COMPLETE - selectedIndex is now:', selectedIndex);
 	}
-
-	// Track current scale and translateX from InfiniteCanvas
-	let currentScale = $state(1);
-	let currentTranslateX = $state(0);
-	let currentTimeScale = $state(10);
 
 	// Track if any card is being dragged or resized
 	let isAnyCardDragging = $state(false);
 	let isAnyCardResizing = $state(false);
 	let activeResizeEdge = $state<'left' | 'right' | null>(null);
 
-	function handleScaleChange(scale: number, translateX: number) {
-		currentScale = scale;
-		currentTranslateX = translateX;
-	}
-	
 	function handleTimeScaleChange(timeScale: number) {
-		currentTimeScale = timeScale;
 		// Notify parent to recalculate items with new time scale
 		if (onTimeScaleChange) {
 			onTimeScaleChange(timeScale);
@@ -147,42 +134,37 @@
 </script>
 
 <div class="timeline-view" tabindex="-1">
-	<InfiniteCanvas 
-		onScaleChange={handleScaleChange}
-		onTimeScaleChange={handleTimeScaleChange}
-		selectedCard={selectedCard}
-		onCanvasClick={handleCanvasClick}
-		isAnyCardDragging={isAnyCardDragging}
-		isAnyCardResizing={isAnyCardResizing}
-		activeResizeEdge={activeResizeEdge}
-	>
-		{#each items as item, index (item.file.path)}
-			{@const isCardSelected = selectedIndex === index}
-			{console.log('Timeline RENDER: Card', item.title, 'index:', index, 'selectedIndex:', selectedIndex, 'isSelected:', isCardSelected)}
-			<TimelineCard 
-				x={item.x} 
-				y={item.y} 
-				width={item.width}
-				title={item.title}
-				scale={currentScale}
-				timeScale={currentTimeScale}
-				translateX={currentTranslateX}
-				layer={item.layer ?? 0}
-				color={item.color}
-				isSelected={isCardSelected}
-				onResize={(newX, newWidth, finished) => handleResize(index, newX, newWidth, finished)}
-				onMove={(newX, newY, finished) => handleMove(index, newX, newY, finished)}
-				onLayerChange={(newLayer, newX, newWidth, finished) => handleLayerChange(index, newLayer, newX, newWidth, finished)}
-				onClick={() => onItemClick(index)}
-				onSelect={() => onItemSelect(index)}
-				onUpdateSelection={(startX, endX, startDate, endDate) => onUpdateSelectionData(startX, endX, startDate, endDate)}
-				onDragStart={handleDragStart}
-				onDragEnd={handleDragEnd}
-				onResizeStart={handleResizeStart}
-				onResizeEnd={handleResizeEnd}
-			/>
-		{/each}
-	</InfiniteCanvas>
+		<InfiniteCanvas 
+			onTimeScaleChange={handleTimeScaleChange}
+			selectedCard={selectedCard}
+			onCanvasClick={handleCanvasClick}
+			isAnyCardDragging={isAnyCardDragging}
+			isAnyCardResizing={isAnyCardResizing}
+			activeResizeEdge={activeResizeEdge}
+		>
+			{#each items as item, index (item.file.path)}
+				{@const isCardSelected = selectedIndex === index}
+				<TimelineCard 
+					x={item.x} 
+					y={item.y} 
+					width={item.width}
+					title={item.title}
+					layer={item.layer ?? 0}
+					color={item.color}
+					isSelected={isCardSelected}
+					onResize={(newX, newWidth, finished) => handleResize(index, newX, newWidth, finished)}
+					onMove={(newX, newY, finished) => handleMove(index, newX, newY, finished)}
+					onLayerChange={(newLayer, newX, newWidth, finished) => handleLayerChange(index, newLayer, newX, newWidth, finished)}
+					onClick={() => onItemClick(index)}
+					onSelect={() => onItemSelect(index)}
+					onUpdateSelection={(startX, endX, startDate, endDate) => onUpdateSelectionData(startX, endX, startDate, endDate)}
+					onDragStart={handleDragStart}
+					onDragEnd={handleDragEnd}
+					onResizeStart={handleResizeStart}
+					onResizeEnd={handleResizeEnd}
+				/>
+			{/each}
+		</InfiniteCanvas>
 </div>
 
 <style>

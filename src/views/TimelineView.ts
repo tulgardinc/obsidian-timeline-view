@@ -5,6 +5,7 @@ import { LayerManager, type LayerableItem, type LayerAssignment, type TimelineCo
 import { TimelineHistoryManager, type TimelineState } from "../utils/TimelineHistoryManager";
 import { TimeScaleManager } from "../utils/TimeScaleManager";
 import { TimelineDate } from "../utils/TimelineDate";
+import type { TimelineItem } from "../stores/timelineStore";
 
 export const VIEW_TYPE_TIMELINE = "timeline-view";
 
@@ -13,17 +14,7 @@ export interface TimelineFile {
 	title: string;
 }
 
-export interface TimelineItem {
-	file: TFile;
-	title: string;
-	x: number;
-	y: number;
-	width: number;
-	dateStart: string;
-	dateEnd: string;
-	layer?: number;
-	color?: TimelineColor;
-}
+export type { TimelineItem };
 
 interface ExpectedFileState {
 	dateStart: string;
@@ -167,8 +158,6 @@ export class TimelineView extends ItemView {
 				layer,
 				color: item.color
 			});
-			
-			console.log(`Timeline: Added ${item.file.basename} at x=${x}, y=${y}, layer=${layer}, width=${width}`);
 		}
 		
 		return items;
@@ -176,8 +165,6 @@ export class TimelineView extends ItemView {
 
 	private async batchUpdateLayers(assignments: LayerAssignment[]): Promise<void> {
 		if (assignments.length === 0) return;
-		
-		console.log(`Timeline: Batch updating ${assignments.length} layer assignments`);
 		
 		for (const assignment of assignments) {
 			try {
@@ -199,7 +186,6 @@ export class TimelineView extends ItemView {
 				}
 				
 				await this.app.vault.modify(assignment.file, newContent);
-				console.log(`Timeline: Updated ${assignment.file.basename} layer to ${assignment.layer}`);
 				
 				// Track expected state for this file
 				const metadata = this.app.metadataCache.getFileCache(assignment.file);
@@ -222,8 +208,6 @@ export class TimelineView extends ItemView {
 		const days = Math.round(TimeScaleManager.worldXToDay(pixels, this.timeScale));
 		// Create TimelineDate from days from epoch (handles arbitrary date ranges)
 		const date = TimelineDate.fromDaysFromEpoch(days);
-		
-		console.log(`pixelsToDate: pixels=${pixels}, days=${days}, result=${date.toISOString()}`);
 		
 		// Return ISO format: YYYY-MM-DD (astronomical year numbering)
 		return date.toISOString();
@@ -275,8 +259,6 @@ export class TimelineView extends ItemView {
 				this.updateSelectionInComponent();
 			}
 		}
-		
-		console.log(`Timeline: Recalculated positions with timeScale=${this.timeScale}`);
 	}
 
 	private async updateItemDates(index: number, newX: number, newWidth: number): Promise<void> {
@@ -291,8 +273,6 @@ export class TimelineView extends ItemView {
 		const newDateStart = this.pixelsToDate(newX);
 		const endPixels = newX + newWidth;
 		const newDateEnd = this.pixelsToDate(endPixels);
-		
-		console.log(`Timeline: Updating ${item.file.basename}: ${newDateStart} to ${newDateEnd}`);
 		
 		// Capture previous state for history
 		const previousState: TimelineState = {
@@ -341,8 +321,6 @@ export class TimelineView extends ItemView {
 				layer: item.layer ?? 0,
 				timestamp: Date.now()
 			});
-			
-			console.log(`Timeline: Successfully updated ${item.file.basename}`);
 		} catch (error) {
 			console.error(`Timeline: Failed to update ${item.file.basename}:`, error);
 			new Notice(`Failed to update ${item.file.basename}: ${error}`);
@@ -361,8 +339,6 @@ export class TimelineView extends ItemView {
 		const newDateStart = this.pixelsToDate(newX);
 		const endPixels = newX + item.width;
 		const newDateEnd = this.pixelsToDate(endPixels);
-		
-		console.log(`Timeline: Moving ${item.file.basename}: ${newDateStart} to ${newDateEnd}, y=${newY}`);
 		
 		// Capture previous state for history
 		const previousState: TimelineState = {
@@ -446,8 +422,6 @@ export class TimelineView extends ItemView {
 			return;
 		}
 		
-		console.log(`Timeline: Checking collision for ${item.file.basename} at layer ${targetLayer} with dates ${newDateStart} to ${newDateEnd}`);
-		
 		// Check if target layer has collision
 		let finalLayer = targetLayer;
 		let hasCollision = false;
@@ -463,14 +437,12 @@ export class TimelineView extends ItemView {
 			
 			if (LayerManager.rangesOverlap(dateStart, dateEnd, otherDateStart, otherDateEnd)) {
 				hasCollision = true;
-				console.log(`Timeline: Collision detected at layer ${targetLayer} with ${otherItem.file.basename} (${otherItem.dateStart} to ${otherItem.dateEnd})`);
 				break;
 			}
 		}
 		
 		// If collision detected, find first available layer using alternating search
 		if (hasCollision) {
-			console.log(`Timeline: Collision detected at layer ${targetLayer} for ${item.file.basename}, searching for alternative...`);
 			
 			const maxSearch = Math.max(this.timelineItems.length * 2, 100);
 			let found = false;
@@ -535,8 +507,6 @@ export class TimelineView extends ItemView {
 		// Calculate new Y position from layer
 		const newY = LayerManager.layerToY(finalLayer);
 		
-		console.log(`Timeline: Updating ${item.file.basename} layer from ${item.layer} to ${finalLayer} (y=${newY})`);
-		
 		try {
 			// Read current content
 			const content = await this.app.vault.read(item.file);
@@ -596,8 +566,6 @@ export class TimelineView extends ItemView {
 			if (this.component && this.component.refreshItems) {
 				this.component.refreshItems(this.timelineItems);
 			}
-			
-			console.log(`Timeline: Successfully updated ${item.file.basename} layer to ${finalLayer}`);
 		} catch (error) {
 			console.error(`Timeline: Failed to update layer for ${item.file.basename}:`, error);
 			new Notice(`Failed to update layer for ${item.file.basename}: ${error}`);
@@ -605,15 +573,12 @@ export class TimelineView extends ItemView {
 	}
 
 	private async openFile(index: number): Promise<void> {
-		console.log('Timeline: Click detected on card', index);
-		
 		if (index < 0 || index >= this.timelineItems.length) {
 			console.error('Timeline: Invalid item index for open', index);
 			return;
 		}
 		
 		const item = this.timelineItems[index]!;
-		console.log('Timeline: Opening/focusing file', item.file.basename, 'at path', item.file.path);
 		
 		try {
 			// Open the file in the workspace
@@ -644,12 +609,10 @@ export class TimelineView extends ItemView {
 				if (existingLeaf) {
 					// File is already open, just focus the existing leaf
 					this.app.workspace.setActiveLeaf(existingLeaf);
-					console.log(`Timeline: Focused existing tab for ${item.file.basename}`);
 				} else {
 					// File not open, create new leaf and open file
 					const leaf = this.app.workspace.getLeaf('tab');
 					await leaf.openFile(file);
-					console.log(`Timeline: Opened ${item.file.basename} in new tab`);
 				}
 			} else {
 				console.error(`Timeline: Could not find file ${item.file.path}`);
@@ -665,11 +628,8 @@ export class TimelineView extends ItemView {
 	 * Select a card (without toggling - always select)
 	 */
 	private selectCard(index: number): void {
-		console.log('TimelineView: selectCard CALLED for index:', index, 'current:', this.selectedIndex);
-		
 		// If already selected, do nothing
 		if (this.selectedIndex === index) {
-			console.log('TimelineView: Card already selected, no change needed');
 			return;
 		}
 		
@@ -692,7 +652,6 @@ export class TimelineView extends ItemView {
 				endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel),
 				title: item.title
 			};
-			console.log('TimelineView: selectedCardData calculated:', this.selectedCardData);
 		}
 		
 		// Update the component with new selection state
@@ -703,16 +662,12 @@ export class TimelineView extends ItemView {
 	 * Toggle selection of a card (select if not selected, deselect if already selected)
 	 */
 	private toggleSelection(index: number): void {
-		console.log('TimelineView: toggleSelection CALLED for index:', index, 'current:', this.selectedIndex);
-		
 		// If clicking the same card, deselect it (toggle off)
 		if (this.selectedIndex === index) {
-			console.log('TimelineView: Deselecting (toggle off)');
 			this.selectedIndex = null;
 			this.selectedCardData = null;
 		} else {
 			// Select the new card
-			console.log('TimelineView: Selecting new card');
 			this.selectedIndex = index;
 			
 			// Calculate and store boundary data for the selected card
@@ -731,16 +686,11 @@ export class TimelineView extends ItemView {
 					endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel),
 					title: item.title
 				};
-				console.log('TimelineView: selectedCardData calculated:', this.selectedCardData);
-			} else {
-				console.log('TimelineView: ERROR - Invalid index:', index, 'items length:', this.timelineItems.length);
 			}
 		}
 		
-		console.log('TimelineView: About to call updateSelectionInComponent');
 		// Update the component with new selection state
 		this.updateSelectionInComponent();
-		console.log('TimelineView: toggleSelection COMPLETE');
 	}
 
 	/**
@@ -756,21 +706,8 @@ export class TimelineView extends ItemView {
 	 * Update the Svelte component with current selection state
 	 */
 	private updateSelectionInComponent(): void {
-		console.log('TimelineView: updateSelectionInComponent CALLED');
-		console.log('TimelineView: this.component exists?', !!this.component);
-		
-		if (this.component) {
-			console.log('TimelineView: this.component.setSelection exists?', !!this.component.setSelection);
-			if (this.component.setSelection) {
-				console.log('TimelineView: Calling setSelection with:', this.selectedIndex, this.selectedCardData);
-				this.component.setSelection(this.selectedIndex, this.selectedCardData);
-				console.log('TimelineView: setSelection call COMPLETE');
-			} else {
-				console.error('TimelineView: ERROR - setSelection method not found on component!');
-				console.log('TimelineView: Available methods on component:', Object.keys(this.component));
-			}
-		} else {
-			console.error('TimelineView: ERROR - Component is null!');
+		if (this.component?.setSelection) {
+			this.component.setSelection(this.selectedIndex, this.selectedCardData);
 		}
 	}
 
@@ -936,7 +873,6 @@ export class TimelineView extends ItemView {
 				}
 			}
 			
-			console.log(`Timeline: Successfully undid ${entry.operationType} for ${entry.file.basename}`);
 			return true;
 		} catch (error) {
 			console.error(`Timeline: Failed to undo ${entry.operationType} for ${entry.file.basename}:`, error);
@@ -1020,7 +956,6 @@ export class TimelineView extends ItemView {
 				}
 			}
 			
-			console.log(`Timeline: Successfully redid ${entry.operationType} for ${entry.file.basename}`);
 			return true;
 		} catch (error) {
 			console.error(`Timeline: Failed to redo ${entry.operationType} for ${entry.file.basename}:`, error);
@@ -1029,7 +964,6 @@ export class TimelineView extends ItemView {
 	}
 
 	async onOpen() {
-		console.log("TimelineView onOpen");
 		await this.render();
 		
 		// Register for file rename events to update card titles in real-time
@@ -1100,16 +1034,12 @@ export class TimelineView extends ItemView {
 					}
 				}
 				
-				console.log(`Timeline: Metadata changed for ${file.basename} (inTimeline: ${isInTimeline}, hasFlag: ${hasTimelineFlag})`);
-				
 				// Debounce rapid changes (e.g., user typing in properties)
 				if (this.metadataChangeTimeout) {
 					clearTimeout(this.metadataChangeTimeout);
 				}
 				
 				this.metadataChangeTimeout = setTimeout(async () => {
-					console.log(`Timeline: Re-collecting items after metadata change`);
-					
 					// Re-collect all timeline items (handles add/remove/update with validation)
 					this.timelineItems = await this.collectTimelineItems();
 					
@@ -1117,8 +1047,6 @@ export class TimelineView extends ItemView {
 					if (this.component && this.component.refreshItems) {
 						this.component.refreshItems(this.timelineItems);
 					}
-					
-					console.log(`Timeline: Updated timeline with ${this.timelineItems.length} items`);
 				}, 300); // 300ms debounce
 			})
 		);
@@ -1170,8 +1098,6 @@ export class TimelineView extends ItemView {
 	}
 
 	async onClose() {
-		console.log("TimelineView onClose");
-		
 		// Clear any pending metadata change timeout
 		if (this.metadataChangeTimeout) {
 			clearTimeout(this.metadataChangeTimeout);

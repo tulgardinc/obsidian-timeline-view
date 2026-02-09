@@ -1,15 +1,14 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { TimeScaleManager } from "../utils/TimeScaleManager";
+	import { getViewportContext } from "../contexts/ViewportContext";
+	import { calculateClampedBounds } from "../utils/ViewportClamping";
 
 	interface Props {
 		x: number;
 		y: number;
 		width: number;
 		title: string;
-		scale: number;
-		timeScale: number;
-		translateX: number;
 		layer: number;
 		color?: 'red' | 'blue' | 'green' | 'yellow';
 		isSelected?: boolean;
@@ -25,12 +24,37 @@
 		onResizeEnd?: () => void;
 	}
 
-	let { x, y, width, title, scale, timeScale, translateX, layer, color, isSelected = false, onResize, onMove, onLayerChange, onClick, onSelect, onUpdateSelection, onDragStart, onDragEnd, onResizeStart, onResizeEnd }: Props = $props();
+	let { x, y, width, title, layer, color, isSelected = false, onResize, onMove, onLayerChange, onClick, onSelect, onUpdateSelection, onDragStart, onDragEnd, onResizeStart, onResizeEnd }: Props = $props();
 
 	const GRID_SPACING = 50;
 	const START_DATE = new Date('1970-01-01');
 	const EDGE_ZONE = 8; // px from edge to trigger resize handle
-	
+
+	// Get viewport context (provided by InfiniteCanvas parent)
+	const viewport = getViewportContext();
+
+	// Get viewport values from context (fallback to defaults if no context)
+	let scale = $derived(viewport?.getScale() ?? 1);
+	let timeScale = $derived(viewport?.getTimeScale() ?? 10);
+	let translateX = $derived(viewport?.getTranslateX() ?? 0);
+	let viewportWidth = $derived(viewport?.getViewportWidth() ?? 0);
+
+	// Viewport clamping calculations using utility function
+	let clampedBounds = $derived(() => calculateClampedBounds(
+		displayX,
+		displayWidth,
+		scale,
+		translateX,
+		viewportWidth
+	));
+
+	let visualX = $derived(() => clampedBounds().visualX);
+	let visualWidth = $derived(() => clampedBounds().visualWidth);
+	let isClampedLeft = $derived(() => clampedBounds().isClampedLeft);
+	let isClampedRight = $derived(() => clampedBounds().isClampedRight);
+	let isClampedBoth = $derived(() => clampedBounds().isClampedBoth);
+	let isCompletelyOutside = $derived(() => clampedBounds().isCompletelyOutside);
+
 	// Get current scale level for marker-based snapping (uses effective density = timeScale * scale)
 	let scaleLevel = $derived(() => TimeScaleManager.getScaleLevel(timeScale, scale));
 
@@ -107,7 +131,6 @@
 			(Math.abs(event.clientX - startMouseX) > 3 || Math.abs(event.clientY - startMouseY) > 3)) {
 			dragThresholdMet = true;
 			isMoving = true;
-			console.log('Move started - drag threshold met');
 			
 			// Notify parent that drag has started
 			if (onDragStart) {
@@ -143,8 +166,6 @@
 				// Update local display state directly
 				displayWidth = newWidth;
 				
-				console.log('Resize right:', { dragStartX, newWidth, targetEndDay, snappedEndDay });
-				
 				// Notify parent for optimistic updates, but don't wait for response
 				if (onResize) {
 					onResize(dragStartX, newWidth, false);
@@ -175,8 +196,6 @@
 				// Update local display state directly
 				displayX = newX;
 				displayWidth = newWidth;
-				
-				console.log('Resize left:', { newX, newWidth, targetStartDay, snappedStartDay });
 				
 				// Notify parent for optimistic updates, but don't wait for response
 				if (onResize) {
@@ -213,8 +232,6 @@
 			displayX = newX;
 			displayY = newSnappedY;
 			
-			console.log('Move:', { dragStartX, newX, dragStartY, newY, layer: calculatedLayer, worldDeltaX, worldDeltaY });
-			
 			// Notify parent for optimistic updates
 			if (onMove) {
 				onMove(newX, newSnappedY, false);
@@ -237,8 +254,6 @@
 			startMouseX = event.clientX;
 			dragStartX = displayX; // Use local display state
 			dragStartWidth = displayWidth; // Use local display state
-			
-			console.log('Resize start:', { edge: resizeEdge, x: displayX, width: displayWidth, scale });
 			
 			// Notify parent that resize has started (with edge info)
 			if (onResizeStart && resizeEdge) {
@@ -266,8 +281,6 @@
 			dragStartX = displayX; // Use local display state
 			dragStartY = displayY; // Use local display state
 			dragThresholdMet = false;
-			
-			console.log('Mouse down - waiting for drag threshold');
 			
 			// Add global listeners
 			window.addEventListener('mousemove', handleWindowMouseMove);
@@ -301,11 +314,9 @@
 		if (hasLayerChange && onLayerChange) {
 			// Layer change handles both position AND layer atomically
 			// Safe to use non-null assertion because we checked targetLayer !== null above
-			console.log('Layer change:', { from: layer, to: targetLayer, x: displayX, width: displayWidth });
 			onLayerChange(targetLayer!, displayX, displayWidth, true);
 		} else if (isMoving && onMove) {
 			// Regular move (same layer) - only position changed
-			console.log('Move finished:', { x: displayX, y: snappedY() });
 			onMove(displayX, snappedY(), true);
 		}
 		
@@ -339,10 +350,12 @@
 		
 		const localX = event.clientX - rect.left;
 		
-		if (localX <= EDGE_ZONE) {
+		// Check left edge - disabled if clamped on left (real edge is outside viewport)
+		if (localX <= EDGE_ZONE && !isClampedLeft()) {
 			resizeEdge = 'left';
 			canMove = false;
-		} else if (localX >= rect.width - EDGE_ZONE) {
+		// Check right edge - disabled if clamped on right (real edge is outside viewport)
+		} else if (localX >= rect.width - EDGE_ZONE && !isClampedRight()) {
 			resizeEdge = 'right';
 			canMove = false;
 		} else {
@@ -385,44 +398,65 @@
 	</div>
 {/if}
 
-<!-- Debug: Log render-time isSelected value -->
-{console.log('TimelineCard RENDER:', title, 'isSelected:', isSelected)}
+<!-- Only render if card is at least partially visible in viewport -->
+{#if !isCompletelyOutside()}
+	<div
+		class="timeline-card"
+		class:color-red={color === 'red'}
+		class:color-blue={color === 'blue'}
+		class:color-green={color === 'green'}
+		class:color-yellow={color === 'yellow'}
+		class:resizing={isResizing}
+		class:moving={isMoving}
+		class:resize-left={resizeEdge === 'left'}
+		class:resize-right={resizeEdge === 'right'}
+		class:selected={isSelected}
+		class:clamped-left={isClampedLeft()}
+		class:clamped-right={isClampedRight()}
+		class:clamped-both={isClampedBoth()}
 
-<div
-	class="timeline-card"
-	class:color-red={color === 'red'}
-	class:color-blue={color === 'blue'}
-	class:color-green={color === 'green'}
-	class:color-yellow={color === 'yellow'}
-	class:resizing={isResizing}
-	class:moving={isMoving}
-	class:resize-left={resizeEdge === 'left'}
-	class:resize-right={resizeEdge === 'right'}
-	class:selected={isSelected}
-
-	style="left: {displayX}px; top: {snappedY()}px; width: {displayWidth}px;"
-	bind:this={cardRef}
-	onmousemove={handleCardMouseMove}
-	onmouseleave={handleCardMouseLeave}
-	onmousedown={handleMouseDown}
-	onclick={handleClick}
-	role="button"
-	tabindex="0"
-	aria-label="Timeline card: {title}"
->
-	<!-- Colored line at top -->
-	<div class="color-line" aria-hidden="true"></div>
-	
-	<!-- Left resize handle -->
-	<div class="resize-handle resize-handle-left" aria-hidden="true"></div>
-	
-	<!-- Right resize handle -->
-	<div class="resize-handle resize-handle-right" aria-hidden="true"></div>
-	
-	<div class="card-content">
-		<h3>{title}</h3>
+		style="left: {visualX()}px; top: {snappedY()}px; width: {visualWidth()}px;"
+		bind:this={cardRef}
+		onmousemove={handleCardMouseMove}
+		onmouseleave={handleCardMouseLeave}
+		onmousedown={handleMouseDown}
+		onclick={handleClick}
+		role="button"
+		tabindex="0"
+		aria-label="Timeline card: {title}"
+	>
+		<!-- Colored line at top -->
+		<div class="color-line" aria-hidden="true"></div>
+		
+		<!-- Left resize handle - only show if not clamped -->
+		{#if !isClampedLeft()}
+			<div class="resize-handle resize-handle-left" aria-hidden="true"></div>
+		{/if}
+		
+		<!-- Right resize handle - only show if not clamped -->
+		{#if !isClampedRight()}
+			<div class="resize-handle resize-handle-right" aria-hidden="true"></div>
+		{/if}
+		
+		<!-- Clamp indicator for left edge -->
+		{#if isClampedLeft()}
+			<div class="clamp-indicator clamp-indicator-left" aria-hidden="true">
+				<span class="clamp-arrow">&#9664;</span>
+			</div>
+		{/if}
+		
+		<!-- Clamp indicator for right edge -->
+		{#if isClampedRight()}
+			<div class="clamp-indicator clamp-indicator-right" aria-hidden="true">
+				<span class="clamp-arrow">&#9654;</span>
+			</div>
+		{/if}
+		
+		<div class="card-content" class:clamped-content-left={isClampedLeft()} class:clamped-content-right={isClampedRight()}>
+			<h3>{title}</h3>
+		</div>
 	</div>
-</div>
+{/if}
 
 <style>
 	.timeline-card {
@@ -565,5 +599,55 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	/* Clamp indicator styles */
+	.timeline-card.clamped-left {
+		border-left: 2px dashed var(--text-muted);
+	}
+
+	.timeline-card.clamped-right {
+		border-right: 2px dashed var(--text-muted);
+	}
+
+	.timeline-card.clamped-both {
+		border-left: 2px dashed var(--text-muted);
+		border-right: 2px dashed var(--text-muted);
+	}
+
+	.clamp-indicator {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 16px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		pointer-events: none;
+		z-index: 2;
+	}
+
+	.clamp-indicator-left {
+		left: 0;
+		background: linear-gradient(to right, var(--background-secondary) 30%, transparent 100%);
+	}
+
+	.clamp-indicator-right {
+		right: 0;
+		background: linear-gradient(to left, var(--background-secondary) 30%, transparent 100%);
+	}
+
+	.clamp-arrow {
+		font-size: 10px;
+		color: var(--text-muted);
+		opacity: 0.7;
+	}
+
+	.card-content.clamped-content-left {
+		margin-left: 18px;
+	}
+
+	.card-content.clamped-content-right {
+		margin-right: 18px;
 	}
 </style>

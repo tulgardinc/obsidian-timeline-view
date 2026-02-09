@@ -63,10 +63,7 @@ export class TimeScaleManager {
 			
 			// If markers would be at least MIN_MARKER_SPACING apart, this level is good
 			if (spacing >= MIN_MARKER_SPACING) {
-				console.log(`[TimeScaleManager] Level ${level}: spacing=${spacing.toFixed(2)}px >= ${MIN_MARKER_SPACING}px`);
 				return level;
-			} else {
-				console.log(`[TimeScaleManager] Level ${level}: spacing=${spacing.toFixed(2)}px < ${MIN_MARKER_SPACING}px, trying next`);
 			}
 		}
 		
@@ -77,12 +74,10 @@ export class TimeScaleManager {
 			const spacing = pixelsPerDay * daysInUnit;
 			
 			if (spacing >= MIN_MARKER_SPACING) {
-				console.log(`[TimeScaleManager] Level ${level}: spacing=${spacing.toFixed(2)}px >= ${MIN_MARKER_SPACING}px`);
 				return level;
 			}
 		}
 		
-		console.log(`[TimeScaleManager] WARNING: Returning max level 20, no suitable level found`);
 		return 20; // Max level
 	}
 	
@@ -177,9 +172,6 @@ export class TimeScaleManager {
 		const startDay = Math.floor(worldStartX / timeScale);
 		const endDay = Math.ceil(worldEndX / timeScale);
 		
-		console.log(`[getVisibleMarkers] Level=${level}, timeScale=${timeScale}, scale=${scale}, viewport=${viewportWidth}`);
-		console.log(`[getVisibleMarkers] Days range: ${startDay} to ${endDay} (${endDay - startDay} days)`);
-		
 		let result: Marker[];
 		switch (level) {
 			case 0:
@@ -195,7 +187,6 @@ export class TimeScaleManager {
 				result = this.getLargeUnitMarkers(level, startDay, endDay, timeScale, scale, translateX, viewportWidth);
 		}
 		
-		console.log(`[getVisibleMarkers] Generated ${result.length} markers for level ${level}`);
 		return result;
 	}
 	
@@ -249,10 +240,6 @@ export class TimeScaleManager {
 		const startDate = TimelineDate.fromDaysFromEpoch(startDay);
 		const endDate = TimelineDate.fromDaysFromEpoch(endDay);
 		
-		console.log(`[getMonthMarkers] startDay=${startDay}, endDay=${endDay}, viewport=${viewportWidth}`);
-		console.log(`[getMonthMarkers] startDate: year=${startDate.getYear()}, month=${startDate.getMonth()}`);
-		console.log(`[getMonthMarkers] endDate: year=${endDate.getYear()}, month=${endDate.getMonth()}`);
-		
 		// Start from the first day of the start month
 		let currentYear = startDate.getYear();
 		let currentMonth = startDate.getMonth();
@@ -270,14 +257,12 @@ export class TimeScaleManager {
 			const monthDate = TimelineDate.fromString(dateStr);
 			
 			if (!monthDate) {
-				console.log(`[getMonthMarkers] Failed to parse date: ${dateStr}`);
 				break;
 			}
 			
 			const day = monthDate.getDaysFromEpoch();
 			
 			if (day > endDay) {
-				console.log(`[getMonthMarkers] Day ${day} > endDay ${endDay}, stopping`);
 				break;
 			}
 			
@@ -303,7 +288,6 @@ export class TimeScaleManager {
 			}
 		}
 		
-		console.log(`[getMonthMarkers] Generated ${markers.length} month markers after ${safetyCounter} iterations`);
 		return markers;
 	}
 	
@@ -323,8 +307,6 @@ export class TimeScaleManager {
 		const startDate = TimelineDate.fromDaysFromEpoch(startDay);
 		const endDate = TimelineDate.fromDaysFromEpoch(endDay);
 		
-		console.log(`[getYearMarkers] startDay=${startDay}, endDay=${endDay}, startYear=${startDate.getYear()}, endYear=${endDate.getYear()}`);
-		
 		let year = startDate.getYear();
 		
 		let safetyCounter = 0;
@@ -334,14 +316,12 @@ export class TimeScaleManager {
 			safetyCounter++;
 			
 			if (year > endDate.getYear() + 1) {
-				console.log(`[getYearMarkers] Year ${year} > ${endDate.getYear() + 1}, stopping`);
 				break;
 			}
 			
 			// Create date for January 1st of this year
 			const yearDate = TimelineDate.fromString(`${year}-01-01`);
 			if (!yearDate) {
-				console.log(`[getYearMarkers] Failed to parse year: ${year}`);
 				year++;
 				continue;
 			}
@@ -365,7 +345,6 @@ export class TimeScaleManager {
 			year++;
 		}
 		
-		console.log(`[getYearMarkers] Generated ${markers.length} year markers after ${safetyCounter} iterations`);
 		return markers;
 	}
 	
@@ -407,7 +386,6 @@ export class TimeScaleManager {
 			// Create date for start of this unit
 			const unitDate = TimelineDate.fromString(`${currentUnit}-01-01`);
 			if (!unitDate) {
-				console.log(`[getLargeUnitMarkers] Failed to parse year: ${currentUnit}`);
 				currentUnit += yearsPerUnit;
 				continue;
 			}
@@ -431,7 +409,6 @@ export class TimeScaleManager {
 			currentUnit += yearsPerUnit;
 		}
 		
-		console.log(`[getLargeUnitMarkers] Generated ${markers.length} markers for level ${level} after ${safetyCounter} iterations`);
 		return markers;
 	}
 	

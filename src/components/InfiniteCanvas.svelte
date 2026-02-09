@@ -2,6 +2,7 @@
 	import { onMount } from "svelte";
 	import GridLines from "./GridLines.svelte";
 	import TimelineHeader from "./TimelineHeader.svelte";
+	import { setViewportContext, type ViewportState } from "../contexts/ViewportContext";
 
 	interface CardHoverData {
 		startX: number;
@@ -60,7 +61,8 @@
 
 	interface Props {
 		children: import('svelte').Snippet;
-		onScaleChange?: (scale: number, translateX: number) => void;
+		onScaleChange?: (scale: number, translateX: number, translateY: number) => void;
+		onViewportChange?: (width: number, height: number) => void;
 		onTimeScaleChange?: (timeScale: number) => void;
 		selectedCard?: CardHoverData | null;
 		onCanvasClick?: () => void;
@@ -69,16 +71,34 @@
 		activeResizeEdge?: 'left' | 'right' | null;
 	}
 
-	let { children, onScaleChange, onTimeScaleChange, selectedCard = null, onCanvasClick, isAnyCardDragging = false, isAnyCardResizing = false, activeResizeEdge = null }: Props = $props();
+	let { children, onScaleChange, onViewportChange, onTimeScaleChange, selectedCard = null, onCanvasClick, isAnyCardDragging = false, isAnyCardResizing = false, activeResizeEdge = null }: Props = $props();
 
-	// Notify parent of scale changes
+	// Set viewport context for child components
+	// Use a getter function to always get current values
+	setViewportContext({
+		getScale: () => scale,
+		getTranslateX: () => translateX,
+		getTranslateY: () => translateY,
+		getViewportWidth: () => viewportWidth,
+		getViewportHeight: () => viewportHeight,
+		getTimeScale: () => timeScale
+	});
+
+	// Notify parent of scale changes (for backward compatibility)
 	$effect(() => {
 		if (onScaleChange) {
-			onScaleChange(scale, translateX);
+			onScaleChange(scale, translateX, translateY);
 		}
 	});
 	
-	// Notify parent of time scale changes
+	// Notify parent of viewport size changes (for backward compatibility)
+	$effect(() => {
+		if (onViewportChange) {
+			onViewportChange(viewportWidth, viewportHeight);
+		}
+	});
+	
+	// Notify parent of time scale changes (for backward compatibility)
 	$effect(() => {
 		if (onTimeScaleChange) {
 			onTimeScaleChange(timeScale);
@@ -112,9 +132,7 @@
 			forceRender += 1;
 			// Query all timeline cards and force individual repaints
 			const cards = viewportRef?.querySelectorAll('.timeline-card') as NodeListOf<HTMLElement>;
-			console.log('Timeline: Triggering crisp render for', cards?.length || 0, 'cards');
-			cards?.forEach((card, index) => {
-				console.log(`Timeline: Repainting card ${index}`);
+			cards?.forEach((card) => {
 				forceRepaint(card);
 			});
 		}, 150);
@@ -402,10 +420,23 @@
 		updateViewportDimensions();
 		centerView();
 		
-		// Handle window resize
-		window.addEventListener('resize', updateViewportDimensions);
+		// Use ResizeObserver to detect ANY viewport size changes
+		// This catches dev tools, Obsidian panel resizing, split views, etc.
+		let resizeObserver: ResizeObserver | null = null;
+		
+		if (viewportRef) {
+			resizeObserver = new ResizeObserver((entries) => {
+				for (const entry of entries) {
+					if (entry.target === viewportRef) {
+						updateViewportDimensions();
+					}
+				}
+			});
+			resizeObserver.observe(viewportRef);
+		}
+		
 		return () => {
-			window.removeEventListener('resize', updateViewportDimensions);
+			resizeObserver?.disconnect();
 		};
 	});
 </script>

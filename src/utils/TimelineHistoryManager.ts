@@ -50,8 +50,6 @@ export class TimelineHistoryManager {
 			this.history.shift();
 			this.currentIndex--;
 		}
-
-		console.log(`Timeline History: Recorded ${operationType} for ${file.basename}. History size: ${this.history.length}, current index: ${this.currentIndex}`);
 	}
 
 	/**
@@ -82,11 +80,9 @@ export class TimelineHistoryManager {
 			const entry = this.history[this.currentIndex] ?? null;
 			if (entry) {
 				this.currentIndex--;
-				console.log(`Timeline History: Undoing ${entry.operationType} for ${entry.file.basename}. New index: ${this.currentIndex}`);
 			}
 			return entry;
 		}
-		console.log('Timeline History: Nothing to undo');
 		return null;
 	}
 
@@ -97,12 +93,8 @@ export class TimelineHistoryManager {
 		if (this.currentIndex < this.history.length - 1) {
 			this.currentIndex++;
 			const entry = this.history[this.currentIndex] ?? null;
-			if (entry) {
-				console.log(`Timeline History: Redoing ${entry.operationType} for ${entry.file.basename}. New index: ${this.currentIndex}`);
-			}
 			return entry;
 		}
-		console.log('Timeline History: Nothing to redo');
 		return null;
 	}
 
@@ -126,7 +118,6 @@ export class TimelineHistoryManager {
 	clear(): void {
 		this.history = [];
 		this.currentIndex = -1;
-		console.log('Timeline History: Cleared');
 	}
 
 	/**
