@@ -509,7 +509,7 @@
 	/>
 	<div
 		class="content-layer"
-		style="transform: translate3d(0px, {Math.round(translateY)}px, 0) scale3d(1, {scale}, 1); --force-render: {forceRender};"
+		style="transform: translate3d(0px, {Math.round(translateY)}px, 0); --force-render: {forceRender};"
 	>
 		{@render children()}
 	</div>

@@ -83,9 +83,11 @@ describe('CardCameraRenderer', () => {
 
       const render = CardCameraRenderer.calculateRenderData(card, viewport);
       
-      // Card should be at viewport center (400, 300), not at (500, 400)
+      // X should be at viewport center (includes translateX for absolute screen positioning)
       expect(render.x).toBe(VIEWPORT_WIDTH / 2);
-      expect(render.y).toBe(VIEWPORT_HEIGHT / 2);
+      // Y should be the world Y scaled (relative to content-layer, not including translateY)
+      // Content-layer has translateY applied via CSS, so card Y is just the scaled world position
+      expect(render.y).toBe(cameraCenterY);
     });
 
     it('should keep coordinates in safe range for extreme positions', () => {
@@ -111,9 +113,10 @@ describe('CardCameraRenderer', () => {
 
       const render = CardCameraRenderer.calculateRenderData(card, viewport);
       
-      // Should be at viewport center, not extreme coordinate
+      // X should be at viewport center (includes translateX for absolute positioning)
       expect(render.x).toBe(400);
-      expect(render.y).toBe(300);
+      // Y should be the scaled world position (relative to content-layer, not including translateY)
+      expect(render.y).toBe(extremeY);
       expect(render.x).toBeGreaterThanOrEqual(0);
       expect(render.x).toBeLessThan(VIEWPORT_WIDTH);
     });

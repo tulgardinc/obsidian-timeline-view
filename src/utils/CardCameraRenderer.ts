@@ -54,17 +54,23 @@ export class CardCameraRenderer {
     // Calculate screen coordinates using the standard transformation
     // screenX = worldX * scale + translateX
     const screenX = card.x * viewport.scale + viewport.translateX;
-    const screenY = card.y * viewport.scale + viewport.translateY;
+    // screenY is calculated WITHOUT translateY because cards are positioned
+    // relative to the content-layer which already has translateY applied via CSS
+    const screenY = card.y * viewport.scale;
     const screenWidth = card.width * viewport.scale;
     const screenRight = screenX + screenWidth;
 
     // Check visibility - card is visible if any part overlaps with viewport
     // and width is at least 15px (to account for borders and padding)
+    // Note: card height scales with zoom to fill the grid cell
+    const screenHeight = card.height * viewport.scale;
+    // For visibility check, we need absolute screen position including translateY
+    const absoluteScreenY = screenY + viewport.translateY;
     const isVisible = !(
       screenRight < 0 ||
       screenX > viewport.width ||
-      screenY + card.height * viewport.scale < 0 ||
-      screenY > viewport.height
+      absoluteScreenY + screenHeight < 0 ||
+      absoluteScreenY > viewport.height
     ) && screenWidth >= 15;
 
     if (!isVisible) {

@@ -6,6 +6,7 @@ import { TimelineHistoryManager, type TimelineState } from "../utils/TimelineHis
 import { TimeScaleManager } from "../utils/TimeScaleManager";
 import { TimelineDate } from "../utils/TimelineDate";
 import type { TimelineItem } from "../stores/timelineStore";
+import { DeleteConfirmModal, type DeleteAction } from "../modals/DeleteConfirmModal";
 
 export const VIEW_TYPE_TIMELINE = "timeline-view";
 
@@ -703,6 +704,79 @@ export class TimelineView extends ItemView {
 	}
 
 	/**
+	 * Handle delete key press - show confirmation modal
+	 */
+	private handleDeleteCard(): void {
+		if (this.selectedIndex === null || this.selectedIndex >= this.timelineItems.length) {
+			return;
+		}
+
+		const item = this.timelineItems[this.selectedIndex]!;
+		const file = item.file;
+
+		new DeleteConfirmModal(this.app, file, async (action: DeleteAction) => {
+			switch (action) {
+				case 'remove-from-timeline':
+					await this.removeCardFromTimeline(file);
+					break;
+				case 'move-to-trash':
+					await this.moveCardToTrash(file);
+					break;
+				case 'cancel':
+				default:
+					// Do nothing - user cancelled
+					break;
+			}
+		}).open();
+	}
+
+	/**
+	 * Remove timeline property from file frontmatter
+	 */
+	private async removeCardFromTimeline(file: TFile): Promise<void> {
+		try {
+			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				delete frontmatter['timeline'];
+			});
+			new Notice(`Removed "${file.basename}" from timeline`);
+			// Clear selection since the card will be removed from the timeline
+			this.clearSelection();
+			// Refresh the timeline to show the card is gone
+			await this.refreshTimeline();
+		} catch (error) {
+			console.error('Error removing card from timeline:', error);
+			new Notice(`Failed to remove "${file.basename}" from timeline`);
+		}
+	}
+
+	/**
+	 * Move card file to trash
+	 */
+	private async moveCardToTrash(file: TFile): Promise<void> {
+		try {
+			await this.app.vault.trash(file, false);
+			new Notice(`Moved "${file.basename}" to trash`);
+			// Clear selection since the file is gone
+			this.clearSelection();
+			// Refresh the timeline to show the card is gone
+			await this.refreshTimeline();
+		} catch (error) {
+			console.error('Error moving card to trash:', error);
+			new Notice(`Failed to move "${file.basename}" to trash`);
+		}
+	}
+
+	/**
+	 * Refresh the timeline to reflect current file state
+	 */
+	private async refreshTimeline(): Promise<void> {
+		this.timelineItems = await this.collectTimelineItems();
+		if (this.component?.refreshItems) {
+			this.component.refreshItems(this.timelineItems);
+		}
+	}
+
+	/**
 	 * Update the Svelte component with current selection state
 	 */
 	private updateSelectionInComponent(): void {
@@ -1051,16 +1125,9 @@ export class TimelineView extends ItemView {
 			})
 		);
 		
-		// Register keyboard shortcuts for undo/redo in CAPTURE phase
+		// Register keyboard shortcuts for undo/redo and delete in CAPTURE phase
 		// This intercepts events BEFORE they reach Obsidian's handlers
 		const keydownHandler = (event: KeyboardEvent) => {
-			// Only handle Ctrl/Cmd + Z/Y
-			const isUndo = (event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey;
-			const isRedo = ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'z') || 
-			               ((event.ctrlKey || event.metaKey) && event.key === 'y');
-			
-			if (!isUndo && !isRedo) return;
-			
 			// Check if any text editor currently has focus
 			const activeElement = document.activeElement;
 			const isEditorFocused = activeElement?.closest('.cm-editor') !== null ||
@@ -1077,6 +1144,24 @@ export class TimelineView extends ItemView {
 			
 			// Check if our view container is actually visible in the DOM
 			if (!this.contentEl.isConnected) return;
+			
+			// Handle Delete key (Windows/Linux: Delete, Mac: Cmd+Backspace or Cmd+Delete)
+			const isDelete = event.key === 'Delete' || 
+			                (event.key === 'Backspace' && (event.ctrlKey || event.metaKey));
+			
+			if (isDelete && this.selectedIndex !== null) {
+				event.preventDefault();
+				event.stopPropagation();
+				this.handleDeleteCard();
+				return;
+			}
+			
+			// Only handle Ctrl/Cmd + Z/Y
+			const isUndo = (event.ctrlKey || event.metaKey) && event.key === 'z' && !event.shiftKey;
+			const isRedo = ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'z') || 
+			               ((event.ctrlKey || event.metaKey) && event.key === 'y');
+			
+			if (!isUndo && !isRedo) return;
 			
 			// We have the timeline focused and no editor has focus - intercept!
 			if (isUndo) {

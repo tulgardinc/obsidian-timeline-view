@@ -74,12 +74,16 @@
 	});
 
 	// Card data in world coordinates - computed from display state
+	// Height is GRID_SPACING in world coordinates
 	let cardData = $derived<CardWorldData>({
 		x: displayX,
 		y: snappedY(),
 		width: displayWidth,
-		height: 50 // Fixed card height
+		height: GRID_SPACING
 	});
+
+	// Visual height scales with zoom to fill the grid cell
+	let visualHeight = $derived(() => GRID_SPACING * scale);
 
 	// Use Camera System to calculate render data
 	// This keeps coordinates in safe viewport-relative range
@@ -399,7 +403,7 @@
 		class:clamped-right={isClampedRight()}
 		class:clamped-both={isClampedBoth()}
 
-		style="left: {visualX()}px; top: {snappedY()}px; width: {visualWidth()}px;"
+		style="left: {visualX()}px; top: {visualY()}px; width: {visualWidth()}px; height: {visualHeight()}px;"
 		bind:this={cardRef}
 		onmousemove={handleCardMouseMove}
 		onmouseleave={handleCardMouseLeave}
@@ -451,7 +455,6 @@
 		border-radius: 4px;
 		padding: 4px 4px;
 		min-width: 0;
-		height: 50px; /* Exact grid spacing */
 		box-sizing: border-box;
 		box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 		cursor: pointer;
