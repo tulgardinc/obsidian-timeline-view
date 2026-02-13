@@ -14,11 +14,12 @@
 
 	interface Props {
 		items: TimelineItem[];
-		selectedIndex?: number | null;
+		selectedIndices?: Set<number>;
+		activeIndex?: number | null;
 		selectedCard?: CardHoverData | null;
 		timelineName?: string;
-		onItemResize: (index: number, newX: number, newWidth: number) => void;
-		onItemMove: (index: number, newX: number, newY: number) => void;
+		onItemResize: (index: number, edge: 'left' | 'right', deltaX: number) => void;
+		onItemMove: (index: number, deltaX: number, deltaY: number) => void;
 		onItemLayerChange: (index: number, newLayer: number, newX: number, newWidth: number) => void;
 		onItemClick: (index: number, event: MouseEvent) => void;
 		onItemSelect: (index: number) => void;
@@ -34,13 +35,14 @@
 		onViewportChange?: () => void;
 	}
 
-	let { items: initialItems, selectedIndex: initialSelectedIndex = null, selectedCard: initialSelectedCard = null, timelineName = "Timeline", onItemResize, onItemMove, onItemLayerChange, onItemClick, onItemSelect, onUpdateSelectionData, onTimeScaleChange, onCanvasClick, onRefreshItems, onItemContextMenu, initialViewport = null, onViewportChange }: Props = $props();
+	let { items: initialItems, selectedIndices: initialSelectedIndices = new Set(), activeIndex: initialActiveIndex = null, selectedCard: initialSelectedCard = null, timelineName = "Timeline", onItemResize, onItemMove, onItemLayerChange, onItemClick, onItemSelect, onUpdateSelectionData, onTimeScaleChange, onCanvasClick, onRefreshItems, onItemContextMenu, initialViewport = null, onViewportChange }: Props = $props();
 
 	// Create local reactive state from props for optimistic updates during drag/resize
 	let items = $state<TimelineItem[]>([...initialItems]);
 	
-	// Local reactive state for selection (can be updated from parent via setSelection)
-	let selectedIndex = $state<number | null>(initialSelectedIndex);
+	// Local reactive state for multi-selection (can be updated from parent via setSelection)
+	let selectedIndices = $state<Set<number>>(new Set(initialSelectedIndices));
+	let activeIndex = $state<number | null>(initialActiveIndex);
 	let selectedCard = $state<CardHoverData | null>(initialSelectedCard);
 
 	// Export a function that TimelineView can call to refresh items
@@ -49,8 +51,9 @@
 	}
 	
 	// Export a function that TimelineView can call to update selection
-	export function setSelection(index: number | null, cardData: CardHoverData | null) {
-		selectedIndex = index;
+	export function setSelection(newSelectedIndices: Set<number>, newActiveIndex: number | null, cardData: CardHoverData | null) {
+		selectedIndices = new Set(newSelectedIndices);
+		activeIndex = newActiveIndex;
 		selectedCard = cardData;
 	}
 
@@ -112,19 +115,34 @@
 		}
 	}
 
-	function handleResize(index: number, newX: number, newWidth: number, finished: boolean) {
+	function handleResize(index: number, edge: 'left' | 'right', deltaX: number, finished: boolean) {
+		// Get the item being resized
+		if (index < 0 || index >= items.length) return;
+		
+		const item = items[index];
+		if (!item) return;
+		
+		// Calculate new position and size based on edge
+		let newX = item.x;
+		let newWidth = item.width;
+		
+		if (edge === 'left') {
+			newX = item.x + deltaX;
+			newWidth = item.width - deltaX;
+		} else {
+			newWidth = item.width + deltaX;
+		}
+		
 		// Update the item optimistically by creating new object for reactivity
-		if (index >= 0 && index < items.length) {
-			items[index] = {
-				...items[index],
-				x: newX,
-				width: newWidth
-			};
-			
-			// If finished, notify parent to save
-			if (finished) {
-				onItemResize(index, newX, newWidth);
-			}
+		items[index] = {
+			...item,
+			x: newX,
+			width: newWidth
+		};
+		
+		// If finished, notify parent with the delta for multi-select support
+		if (finished) {
+			onItemResize(index, edge, deltaX);
 		}
 	}
 
@@ -138,19 +156,27 @@
 		activeResizeEdge = null;
 	}
 
-	function handleMove(index: number, newX: number, newY: number, finished: boolean) {
+	function handleMove(index: number, deltaX: number, deltaY: number, finished: boolean) {
+		// Get the item being moved
+		if (index < 0 || index >= items.length) return;
+		
+		const item = items[index];
+		if (!item) return;
+		
+		// Calculate new position
+		const newX = item.x + deltaX;
+		const newY = item.y + deltaY;
+		
 		// Update the item optimistically by creating new object for reactivity
-		if (index >= 0 && index < items.length) {
-			items[index] = {
-				...items[index],
-				x: newX,
-				y: newY
-			};
-			
-			// If finished, notify parent to save
-			if (finished) {
-				onItemMove(index, newX, newY);
-			}
+		items[index] = {
+			...item,
+			x: newX,
+			y: newY
+		};
+		
+		// If finished, notify parent with the delta for multi-select support
+		if (finished) {
+			onItemMove(index, deltaX, deltaY);
 		}
 	}
 
@@ -200,18 +226,18 @@
 			onViewportChanged={onViewportChange}
 			timelineName={timelineName}
 		>
-			{#each items as item, index (item.file.path)}
-				{@const isCardSelected = selectedIndex === index}
-				<TimelineCard 
-					x={item.x} 
-					y={item.y} 
-					width={item.width}
-					title={item.title}
-					layer={item.layer ?? 0}
-					color={item.color}
-					isSelected={isCardSelected}
-				onResize={(newX, newWidth, finished) => handleResize(index, newX, newWidth, finished)}
-				onMove={(newX, newY, finished) => handleMove(index, newX, newY, finished)}
+		{#each items as item, index (item.file.path)}
+			{@const isCardSelected = selectedIndices.has(index)}
+			<TimelineCard 
+				x={item.x} 
+				y={item.y} 
+				width={item.width}
+				title={item.title}
+				layer={item.layer ?? 0}
+				color={item.color}
+				isSelected={isCardSelected}
+				onResize={(edge, deltaX, finished) => handleResize(index, edge, deltaX, finished)}
+				onMove={(deltaX, deltaY, finished) => handleMove(index, deltaX, deltaY, finished)}
 				onLayerChange={(newLayer, newX, newWidth, finished) => handleLayerChange(index, newLayer, newX, newWidth, finished)}
 				onClick={(event) => onItemClick(index, event)}
 				onSelect={() => onItemSelect(index)}
@@ -222,7 +248,7 @@
 				onResizeEnd={handleResizeEnd}
 				onContextMenu={(event) => handleContextMenu(index, event)}
 			/>
-			{/each}
+		{/each}
 		</InfiniteCanvas>
 </div>
 

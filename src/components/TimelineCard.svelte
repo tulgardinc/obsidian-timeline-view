@@ -13,8 +13,8 @@
 		layer: number;
 		color?: 'red' | 'blue' | 'green' | 'yellow';
 		isSelected?: boolean;
-		onResize?: (newX: number, newWidth: number, finished: boolean) => void;
-		onMove?: (newX: number, newY: number, finished: boolean) => void;
+		onResize?: (edge: 'left' | 'right', deltaX: number, finished: boolean) => void;
+		onMove?: (deltaX: number, deltaY: number, finished: boolean) => void;
 		onLayerChange?: (newLayer: number, newX: number, newWidth: number, finished: boolean) => void;
 		onClick?: (event: MouseEvent) => void;
 		onSelect?: () => void;
@@ -186,12 +186,15 @@
 					newWidth = 0;
 				}
 				
+				// Calculate delta from original width
+				const deltaWidth = newWidth - dragStartWidth;
+				
 				// Update local display state directly
 				worldWidth = newWidth;
 				
-				// Notify parent for optimistic updates, but don't wait for response
+				// Notify parent for optimistic updates with delta, but don't wait for response
 				if (onResize) {
-					onResize(dragStartX, newWidth, false);
+					onResize('right', deltaWidth, false);
 				}
 				
 				// Update selection data so indicators follow the card
@@ -214,13 +217,16 @@
 				}
 				const newX = endX - newWidth;
 				
+				// Calculate delta from original position
+				const deltaX = newX - dragStartX;
+				
 				// Update local display state directly
 				worldX = newX;
 				worldWidth = newWidth;
 				
-				// Notify parent for optimistic updates, but don't wait for response
+				// Notify parent for optimistic updates with delta, but don't wait for response
 				if (onResize) {
-					onResize(newX, newWidth, false);
+					onResize('left', deltaX, false);
 				}
 				
 				// Update selection data so indicators follow the card
@@ -247,13 +253,17 @@
 			let calculatedLayer = yToLayer(newY);
 			let newSnappedY = layerToY(calculatedLayer);
 			
+			// Calculate deltas from original position
+			const deltaX = newX - dragStartX;
+			const deltaY = newSnappedY - dragStartY;
+			
 			// Update local display state directly
 			worldX = newX;
 			worldY = newSnappedY;
 			
-			// Notify parent for optimistic updates
+			// Notify parent for optimistic updates with deltas
 			if (onMove) {
-				onMove(newX, newSnappedY, false);
+				onMove(deltaX, deltaY, false);
 			}
 			
 			// Update selection data so indicators follow the card
@@ -279,8 +289,9 @@
 				onResizeStart(resizeEdge);
 			}
 			
-			// Select the card immediately when resize starts
-			if (onSelect) {
+			// Select the card immediately when resize starts, but only if not already selected
+			// This preserves multi-selection when resizing a selected card
+			if (onSelect && !isSelected) {
 				onSelect();
 			}
 			
@@ -318,9 +329,15 @@
 			onClick(lastClickEvent);
 		}
 		
-		if (isResizing && onResize) {
-			// Signal resize is finished - use local world coordinate state
-			onResize(worldX, worldWidth, true);
+		if (isResizing && onResize && resizeEdge) {
+			// Signal resize is finished - calculate final delta
+			let deltaX: number;
+			if (resizeEdge === 'left') {
+				deltaX = worldX - dragStartX;
+			} else {
+				deltaX = worldWidth - dragStartWidth;
+			}
+			onResize(resizeEdge, deltaX, true);
 		}
 		
 		// Notify parent that resize has ended
@@ -329,7 +346,10 @@
 		}
 		
 		if (isMoving && onMove) {
-			onMove(worldX, snappedY(), true);
+			// Calculate final deltas
+			const deltaX = worldX - dragStartX;
+			const deltaY = worldY - dragStartY;
+			onMove(deltaX, deltaY, true);
 		}
 		
 		// Notify parent that drag has ended
@@ -389,8 +409,9 @@
 		event.preventDefault();
 		event.stopPropagation();
 
-		// Select the card when opening context menu
-		if (onSelect) {
+		// Select the card when opening context menu, but only if not already selected
+		// This preserves multi-selection when right-clicking a selected card
+		if (onSelect && !isSelected) {
 			onSelect();
 		}
 

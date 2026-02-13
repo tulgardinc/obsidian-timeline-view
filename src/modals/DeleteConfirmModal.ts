@@ -5,11 +5,13 @@ export type DeleteAction = 'remove-from-timeline' | 'move-to-trash' | 'cancel';
 export class DeleteConfirmModal extends Modal {
 	private file: TFile;
 	private onAction: (action: DeleteAction) => void;
+	private customTitle?: string;
 
-	constructor(app: App, file: TFile, onAction: (action: DeleteAction) => void) {
+	constructor(app: App, file: TFile, onAction: (action: DeleteAction) => void, customTitle?: string) {
 		super(app);
 		this.file = file;
 		this.onAction = onAction;
+		this.customTitle = customTitle;
 	}
 
 	onOpen() {
@@ -19,7 +21,8 @@ export class DeleteConfirmModal extends Modal {
 		contentEl.addClass('delete-confirm-modal');
 
 		// Title
-		contentEl.createEl('h2', { text: `Delete "${this.file.basename}"?` });
+		const title = this.customTitle ?? `Delete "${this.file.basename}"?`;
+		contentEl.createEl('h2', { text: title });
 
 		// Description
 		contentEl.createEl('p', { 

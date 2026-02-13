@@ -119,6 +119,25 @@ export class TimeScaleManager {
 		// Pattern: 36500 * 10^(level-4)
 		return 36500 * Math.pow(10, level - 4);
 	}
+
+	/**
+	 * Get the minimum resize width in pixels for the current timeScale.
+	 * The minimum is the "small" unit at the current scale level:
+	 * - Level 0 (Days): minimum = 1 day = timeScale pixels
+	 * - Level 1 (Months): minimum = ~30 days = 30 * timeScale pixels
+	 * - Level 2 (Years): minimum = 365 days = 365 * timeScale pixels
+	 * - Level 3+ (Decades+): minimum follows the scale unit
+	 * 
+	 * This ensures cards cannot be resized smaller than the current scale unit,
+	 * making resize operations align with the visible grid.
+	 */
+	static getMinResizeWidth(timeScale: number): number {
+		const level = this.getScaleLevel(timeScale);
+		const baseScale = this.getBaseScaleForLevel(level);
+		// The minimum width is the base scale unit (small unit at current level)
+		// At timeScale=1, this is the baseScale. We multiply by timeScale to get pixels.
+		return baseScale * timeScale;
+	}
 	
 	/**
 	 * Get information about the current scale level

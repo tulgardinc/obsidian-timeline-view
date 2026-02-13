@@ -36,7 +36,7 @@ interface ExpectedFileState {
 export class TimelineView extends ItemView {
 	private component: {
 		refreshItems?: (items: TimelineItem[]) => void;
-		setSelection?: (index: number | null, cardData: { startX: number; endX: number; startDate: string; endDate: string; title: string } | null) => void;
+		setSelection?: (selectedIndices: Set<number>, activeIndex: number | null, cardData: { startX: number; endX: number; startDate: string; endDate: string; title: string } | null) => void;
 		centerOnItem?: (index: number) => void;
 		getCenterTime?: () => number | null;
 		centerOnTime?: (days: number) => void;
@@ -51,7 +51,8 @@ export class TimelineView extends ItemView {
 	private keydownHandler: ((event: KeyboardEvent) => void) | null = null; // Store for cleanup
 
 	// Selection state - persists across view updates
-	private selectedIndex: number | null = null;
+	private selectedIndices: Set<number> = new Set(); // Multi-selection support
+	private activeIndex: number | null = null; // Most recently selected item (for primary selection display)
 	private selectedCardData: { startX: number; endX: number; startDate: string; endDate: string; title: string } | null = null;
 	
 	// Time scale - pixels per day (default 10, but will load from cache)
@@ -230,8 +231,9 @@ export class TimelineView extends ItemView {
 			};
 		}
 		
-		if (this.selectedIndex !== null && this.selectedCardData) {
-			const item = this.timelineItems[this.selectedIndex];
+		// Update selection data for active item when time scale changes
+		if (this.activeIndex !== null && this.selectedCardData) {
+			const item = this.timelineItems[this.activeIndex];
 			if (item) {
 				const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
 				const daysStart = Math.round(TimeScaleManager.worldXToDay(item.x, this.timeScale));
@@ -508,6 +510,179 @@ export class TimelineView extends ItemView {
 		}
 	}
 
+	/**
+	 * Multi-select move: Move all selected items by the same delta
+	 */
+	private async updateItemsMove(activeIndex: number, deltaX: number, deltaY: number): Promise<void> {
+		// Get all selected items including the active one
+		const indicesToMove = Array.from(this.selectedIndices).filter(index => 
+			index >= 0 && index < this.timelineItems.length
+		);
+		
+		if (indicesToMove.length === 0) return;
+		
+		// Move all selected items by the same delta
+		for (const index of indicesToMove) {
+			const item = this.timelineItems[index]!;
+			const newX = item.x + deltaX;
+			const newY = item.y + deltaY;
+			
+			const newDateStart = this.pixelsToDate(newX);
+			const endPixels = newX + item.width;
+			const newDateEnd = this.pixelsToDate(endPixels);
+			
+			const previousState: TimelineState = {
+				dateStart: item.dateStart,
+				dateEnd: item.dateEnd,
+				layer: item.layer ?? 0
+			};
+			
+			try {
+				const content = await this.app.vault.read(item.file);
+				
+				const newContent = content
+					.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
+					.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
+				
+				await this.app.vault.modify(item.file, newContent);
+				
+				this.timelineItems[index] = {
+					...item,
+					dateStart: newDateStart,
+					dateEnd: newDateEnd,
+					x: newX,
+					y: newY
+				};
+				
+				const newState: TimelineState = {
+					dateStart: newDateStart,
+					dateEnd: newDateEnd,
+					layer: item.layer ?? 0
+				};
+				this.historyManager.record(item.file, previousState, newState, 'move');
+				
+				this.expectedFileStates.set(item.file.path, {
+					dateStart: newDateStart,
+					dateEnd: newDateEnd,
+					timestamp: Date.now()
+				});
+			} catch (error) {
+				console.error(`Timeline: Failed to move ${item.file.basename}:`, error);
+				new Notice(`Failed to move ${item.file.basename}: ${error}`);
+			}
+		}
+		
+		if (this.component && this.component.refreshItems) {
+			this.component.refreshItems(this.timelineItems);
+		}
+		
+		// Update selection data for the active item
+		if (this.activeIndex !== null) {
+			this.updateSelectedCardData(this.activeIndex);
+			this.updateSelectionInComponent();
+		}
+	}
+
+	/**
+	 * Multi-select resize: Resize all selected items by the same edge delta
+	 * Each card is clamped independently to the minimum width for the current scale level
+	 */
+	private async updateItemsResize(activeIndex: number, edge: 'left' | 'right', deltaX: number): Promise<void> {
+		// Get all selected items including the active one
+		const indicesToResize = Array.from(this.selectedIndices).filter(index => 
+			index >= 0 && index < this.timelineItems.length
+		);
+		
+		if (indicesToResize.length === 0) return;
+		
+		// Minimum width is based on the current scale level's unit
+		// (e.g., 1 day, 1 month, 1 year, etc. depending on zoom)
+		const MIN_WIDTH = TimeScaleManager.getMinResizeWidth(this.timeScale);
+		
+		// Resize all selected items by the same delta on the same edge
+		// Each card clamps independently - cards that would go below minimum stay at minimum
+		for (const index of indicesToResize) {
+			const item = this.timelineItems[index]!;
+			
+			let newX = item.x;
+			let newWidth = item.width;
+			
+			if (edge === 'left') {
+				// Moving left edge: adjust x and width by delta
+				newX = item.x + deltaX;
+				newWidth = item.width - deltaX;
+			} else {
+				// Moving right edge: adjust width by delta
+				newWidth = item.width + deltaX;
+			}
+			
+			// Per-card minimum width enforcement: clamp to scale-appropriate minimum
+			// This allows multi-select resize where some cards may hit minimum while others continue
+			if (newWidth < MIN_WIDTH) {
+				newWidth = MIN_WIDTH;
+				if (edge === 'left') {
+					// For left edge resize, adjust x to keep right edge fixed when clamping
+					newX = item.x + item.width - MIN_WIDTH;
+				}
+				// Note: We don't prevent the resize operation - other cards may still resize normally
+			}
+			
+			const newDateStart = this.pixelsToDate(newX);
+			const endPixels = newX + newWidth;
+			const newDateEnd = this.pixelsToDate(endPixels);
+			
+			const previousState: TimelineState = {
+				dateStart: item.dateStart,
+				dateEnd: item.dateEnd,
+				layer: item.layer ?? 0
+			};
+			
+			try {
+				const content = await this.app.vault.read(item.file);
+				
+				const newContent = content
+					.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
+					.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
+				
+				await this.app.vault.modify(item.file, newContent);
+				
+				this.timelineItems[index] = {
+					...item,
+					dateStart: newDateStart,
+					dateEnd: newDateEnd,
+					x: newX,
+					width: newWidth
+				};
+				
+				const newState: TimelineState = {
+					dateStart: newDateStart,
+					dateEnd: newDateEnd,
+					layer: item.layer ?? 0
+				};
+				this.historyManager.record(item.file, previousState, newState, 'resize');
+				
+				this.expectedFileStates.set(item.file.path, {
+					dateStart: newDateStart,
+					dateEnd: newDateEnd,
+					timestamp: Date.now()
+				});
+			} catch (error) {
+				console.error(`Timeline: Failed to resize ${item.file.basename}:`, error);
+				new Notice(`Failed to resize ${item.file.basename}: ${error}`);
+			}
+		}
+		
+		if (this.component && this.component.refreshItems) {
+			this.component.refreshItems(this.timelineItems);
+		}
+		
+		// Update selection data for the active item
+		if (this.activeIndex !== null) {
+			this.updateSelectedCardData(this.activeIndex);
+			this.updateSelectionInComponent();
+		}
+	}
+
 	private async openFile(index: number): Promise<void> {
 		if (index < 0 || index >= this.timelineItems.length) {
 			console.error('Timeline: Invalid item index for open', index);
@@ -558,12 +733,51 @@ export class TimelineView extends ItemView {
 			this.app.workspace.setActiveLeaf(this.leaf);
 		}
 
-		if (this.selectedIndex === index) {
-			return;
+		// Click without modifier: select only this card, clear all others
+		this.selectedIndices.clear();
+		this.selectedIndices.add(index);
+		this.activeIndex = index;
+		
+		this.updateSelectedCardData(index);
+		this.updateSelectionInComponent();
+	}
+
+	private toggleSelection(index: number): void {
+		if (this.leaf !== this.app.workspace.activeLeaf) {
+			this.app.workspace.setActiveLeaf(this.leaf);
 		}
 
-		this.selectedIndex = index;
+		// Shift+click: toggle this card in selection
+		if (this.selectedIndices.has(index)) {
+			this.selectedIndices.delete(index);
+			if (this.activeIndex === index) {
+				// If we removed the active item, set active to last selected or null
+				const lastSelected = Array.from(this.selectedIndices).pop();
+				this.activeIndex = lastSelected ?? null;
+			}
+		} else {
+			this.selectedIndices.add(index);
+			this.activeIndex = index;
+		}
 		
+		// Update primary selection data for display
+		if (this.activeIndex !== null) {
+			this.updateSelectedCardData(this.activeIndex);
+		} else {
+			this.selectedCardData = null;
+		}
+		
+		this.updateSelectionInComponent();
+	}
+
+	private clearSelection(): void {
+		this.selectedIndices.clear();
+		this.activeIndex = null;
+		this.selectedCardData = null;
+		this.updateSelectionInComponent();
+	}
+
+	private updateSelectedCardData(index: number): void {
 		if (index >= 0 && index < this.timelineItems.length) {
 			const item = this.timelineItems[index]!;
 			
@@ -579,45 +793,6 @@ export class TimelineView extends ItemView {
 				title: item.title
 			};
 		}
-		
-		this.updateSelectionInComponent();
-	}
-
-	private toggleSelection(index: number): void {
-		if (this.leaf !== this.app.workspace.activeLeaf) {
-			this.app.workspace.setActiveLeaf(this.leaf);
-		}
-
-		if (this.selectedIndex === index) {
-			this.selectedIndex = null;
-			this.selectedCardData = null;
-		} else {
-			this.selectedIndex = index;
-			
-			if (index >= 0 && index < this.timelineItems.length) {
-				const item = this.timelineItems[index]!;
-				
-				const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
-				const daysStart = Math.round(TimeScaleManager.worldXToDay(item.x, this.timeScale));
-				const daysEnd = Math.round(TimeScaleManager.worldXToDay(item.x + item.width, this.timeScale));
-				
-				this.selectedCardData = {
-					startX: item.x,
-					endX: item.x + item.width,
-					startDate: TimeScaleManager.formatDateForLevel(daysStart, scaleLevel),
-					endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel),
-					title: item.title
-				};
-			}
-		}
-		
-		this.updateSelectionInComponent();
-	}
-
-	private clearSelection(): void {
-		this.selectedIndex = null;
-		this.selectedCardData = null;
-		this.updateSelectionInComponent();
 	}
 
 	private showCardContextMenu(index: number, event: MouseEvent): void {
@@ -661,26 +836,48 @@ export class TimelineView extends ItemView {
 	}
 
 	private handleDeleteCard(): void {
-		if (this.selectedIndex === null || this.selectedIndex >= this.timelineItems.length) {
+		// Get all selected items
+		const selectedItems = Array.from(this.selectedIndices)
+			.filter(index => index >= 0 && index < this.timelineItems.length)
+			.map(index => this.timelineItems[index]!);
+		
+		if (selectedItems.length === 0) {
 			return;
 		}
-
-		const item = this.timelineItems[this.selectedIndex]!;
-		const file = item.file;
-
-		new DeleteConfirmModal(this.app, file, async (action: DeleteAction) => {
-			switch (action) {
-				case 'remove-from-timeline':
-					await this.removeCardFromTimeline(file);
-					break;
-				case 'move-to-trash':
-					await this.moveCardToTrash(file);
-					break;
-				case 'cancel':
-				default:
-					break;
-			}
-		}).open();
+		
+		// For single selection, use existing modal; for multi, create a summary
+		if (selectedItems.length === 1) {
+			const file = selectedItems[0]!.file;
+			new DeleteConfirmModal(this.app, file, async (action: DeleteAction) => {
+				switch (action) {
+					case 'remove-from-timeline':
+						await this.removeCardsFromTimeline(selectedItems.map(item => item.file));
+						break;
+					case 'move-to-trash':
+						await this.moveCardsToTrash(selectedItems.map(item => item.file));
+						break;
+					case 'cancel':
+					default:
+						break;
+				}
+			}).open();
+		} else {
+			// Multi-delete confirmation
+			const fileNames = selectedItems.map(item => item.file.basename).join(', ');
+			new DeleteConfirmModal(this.app, selectedItems[0]!.file, async (action: DeleteAction) => {
+				switch (action) {
+					case 'remove-from-timeline':
+						await this.removeCardsFromTimeline(selectedItems.map(item => item.file));
+						break;
+					case 'move-to-trash':
+						await this.moveCardsToTrash(selectedItems.map(item => item.file));
+						break;
+					case 'cancel':
+					default:
+						break;
+				}
+			}, `Delete ${selectedItems.length} cards (${fileNames.substring(0, 50)}${fileNames.length > 50 ? '...' : ''})?`).open();
+		}
 	}
 
 	private async removeCardFromTimeline(file: TFile): Promise<void> {
@@ -727,6 +924,74 @@ export class TimelineView extends ItemView {
 		}
 	}
 
+	private async removeCardsFromTimeline(files: TFile[]): Promise<void> {
+		let successCount = 0;
+		let failCount = 0;
+		
+		for (const file of files) {
+			try {
+				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+					delete frontmatter['timeline'];
+				});
+				successCount++;
+				
+				// Remove from cache
+				if (this.cacheService) {
+					const noteId = this.cacheService.getNoteId(file);
+					if (noteId) {
+						this.cacheService.removeNoteFromTimeline(this.timelineId, noteId);
+					}
+				}
+			} catch (error) {
+				console.error(`Error removing "${file.basename}" from timeline:`, error);
+				failCount++;
+			}
+		}
+		
+		if (successCount > 0) {
+			new Notice(`Removed ${successCount} card${successCount > 1 ? 's' : ''} from timeline`);
+		}
+		if (failCount > 0) {
+			new Notice(`Failed to remove ${failCount} card${failCount > 1 ? 's' : ''}`);
+		}
+		
+		this.clearSelection();
+		await this.refreshTimeline();
+	}
+
+	private async moveCardsToTrash(files: TFile[]): Promise<void> {
+		let successCount = 0;
+		let failCount = 0;
+		
+		for (const file of files) {
+			try {
+				await this.app.vault.trash(file, false);
+				successCount++;
+				
+				// Remove from cache
+				if (this.cacheService) {
+					const noteId = this.cacheService.getNoteId(file);
+					if (noteId) {
+						this.cacheService.removeNoteFromTimeline(this.timelineId, noteId);
+					}
+				}
+			} catch (error) {
+				console.error(`Error moving "${file.basename}" to trash:`, error);
+				failCount++;
+			}
+		}
+		
+		if (successCount > 0) {
+			new Notice(`Moved ${successCount} card${successCount > 1 ? 's' : ''} to trash`);
+		}
+		if (failCount > 0) {
+			new Notice(`Failed to move ${failCount} card${failCount > 1 ? 's' : ''} to trash`);
+		}
+		
+		this.clearSelection();
+		await this.refreshTimeline();
+	}
+
 	private async refreshTimeline(): Promise<void> {
 		this.timelineItems = await this.collectTimelineItems();
 		if (this.component?.refreshItems) {
@@ -764,7 +1029,7 @@ export class TimelineView extends ItemView {
 
 	private updateSelectionInComponent(): void {
 		if (this.component?.setSelection) {
-			this.component.setSelection(this.selectedIndex, this.selectedCardData);
+			this.component.setSelection(this.selectedIndices, this.activeIndex, this.selectedCardData);
 		}
 	}
 
@@ -835,15 +1100,16 @@ export class TimelineView extends ItemView {
 				target: this.contentEl,
 				props: {
 					items: this.timelineItems,
-					selectedIndex: this.selectedIndex,
+					selectedIndices: this.selectedIndices,
+					activeIndex: this.activeIndex,
 					selectedCard: this.selectedCardData,
 					initialViewport: savedViewport,
 					timelineName: this.timelineName,
-					onItemResize: (index: number, newX: number, newWidth: number) => {
-						void this.updateItemDates(index, newX, newWidth);
+					onItemResize: (index: number, edge: 'left' | 'right', deltaX: number) => {
+						void this.updateItemsResize(index, edge, deltaX);
 					},
-					onItemMove: (index: number, newX: number, newY: number) => {
-						void this.updateItemPosition(index, newX, newY);
+					onItemMove: (index: number, deltaX: number, deltaY: number) => {
+						void this.updateItemsMove(index, deltaX, deltaY);
 					},
 					onItemLayerChange: (index: number, newLayer: number, newX: number, newWidth: number) => {
 						void this.updateItemLayer(index, newLayer, newX, newWidth);
@@ -859,7 +1125,7 @@ export class TimelineView extends ItemView {
 						this.selectCard(index);
 					},
 					onUpdateSelectionData: (startX: number, endX: number, startDate: string, endDate: string) => {
-						if (this.selectedIndex !== null && this.selectedCardData) {
+						if (this.activeIndex !== null && this.selectedCardData) {
 							const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
 							const daysStart = Math.round(TimeScaleManager.worldXToDay(startX, this.timeScale));
 							const daysEnd = Math.round(TimeScaleManager.worldXToDay(endX, this.timeScale));
@@ -872,7 +1138,7 @@ export class TimelineView extends ItemView {
 								endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel)
 							};
 							if (this.component && this.component.setSelection) {
-								this.component.setSelection(this.selectedIndex, this.selectedCardData);
+								this.component.setSelection(this.selectedIndices, this.activeIndex, this.selectedCardData);
 							}
 						}
 					},
@@ -1137,7 +1403,7 @@ export class TimelineView extends ItemView {
 			const isDelete = event.key === 'Delete' ||
 			                (event.key === 'Backspace' && (event.ctrlKey || event.metaKey));
 
-			if (isDelete && this.selectedIndex !== null) {
+			if (isDelete && this.selectedIndices.size > 0) {
 				event.preventDefault();
 				event.stopPropagation();
 				this.handleDeleteCard();
