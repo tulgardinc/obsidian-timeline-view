@@ -839,6 +839,61 @@ export class TimelineView extends ItemView {
 
 		menu.addSeparator();
 
+		// Color submenu
+		menu.addItem((itemMenu) => {
+			itemMenu
+				.setTitle("Color")
+				.setIcon("palette");
+			
+			// Use setSubmenu (undocumented but functional Obsidian API)
+			const colorMenu = itemMenu.setSubmenu();
+			
+			// IMPORTANT: Set submenu to use non-native menu (Obsidian styled, not macOS native)
+			colorMenu.setUseNativeMenu(false);
+			
+			// Define color options with their CSS class names
+			const colorOptions: Array<{color: 'red' | 'blue' | 'green' | 'yellow' | null; label: string; cssClass: string}> = [
+				{ color: 'red', label: 'Red', cssClass: 'timeline-color-red' },
+				{ color: 'blue', label: 'Blue', cssClass: 'timeline-color-blue' },
+				{ color: 'green', label: 'Green', cssClass: 'timeline-color-green' },
+				{ color: 'yellow', label: 'Yellow', cssClass: 'timeline-color-yellow' },
+				{ color: null, label: 'Clear color', cssClass: 'timeline-color-clear' }
+			];
+			
+			for (const option of colorOptions) {
+				colorMenu.addItem((colorItem) => {
+					colorItem
+						.setTitle(option.label)
+						.onClick(() => {
+							// If the clicked card is not in the current selection, select only that card
+							// Otherwise, keep the existing multi-selection
+							if (!this.selectedIndices.has(index)) {
+								this.selectCard(index);
+							} else {
+								// Just ensure this is the active item for context
+								this.activeIndex = index;
+								this.updateSelectedCardData(index);
+							}
+							this.applyColorToSelection(option.color);
+						});
+					
+					// Use a small delay to ensure the DOM is rendered before manipulating it
+					requestAnimationFrame(() => {
+						// Access the internal dom property (now properly typed)
+						if (colorItem.dom) {
+							const iconSpan = colorItem.dom.querySelector('.menu-item-icon');
+							if (iconSpan) {
+								iconSpan.className = `menu-item-icon ${option.cssClass}`;
+								iconSpan.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>';
+							}
+						}
+					});
+				});
+			}
+		});
+
+		menu.addSeparator();
+
 		menu.addItem((itemMenu) => {
 			itemMenu
 				.setTitle("Delete")
@@ -1014,6 +1069,53 @@ export class TimelineView extends ItemView {
 		
 		this.clearSelection();
 		await this.refreshTimeline();
+	}
+
+	/**
+	 * Apply color to all selected cards
+	 */
+	private async applyColorToSelection(color: 'red' | 'blue' | 'green' | 'yellow' | null): Promise<void> {
+		const selectedItems = Array.from(this.selectedIndices)
+			.filter(index => index >= 0 && index < this.timelineItems.length)
+			.map(index => this.timelineItems[index]!);
+		
+		if (selectedItems.length === 0) return;
+		
+		let successCount = 0;
+		let failCount = 0;
+		
+		for (const item of selectedItems) {
+			try {
+				await this.app.fileManager.processFrontMatter(item.file, (frontmatter) => {
+					if (color) {
+						frontmatter['color'] = color;
+					} else {
+						delete frontmatter['color'];
+					}
+				});
+				successCount++;
+				
+				// Update the local item for immediate UI feedback
+				item.color = color ?? undefined;
+			} catch (error) {
+				console.error(`Error applying color to "${item.file.basename}":`, error);
+				failCount++;
+			}
+		}
+		
+		// Refresh the component to show updated colors
+		if (this.component?.refreshItems) {
+			this.component.refreshItems(this.timelineItems);
+		}
+		
+		// Show feedback
+		if (successCount > 0) {
+			const colorLabel = color ? color.charAt(0).toUpperCase() + color.slice(1) : 'cleared';
+			new Notice(`Applied ${colorLabel} color to ${successCount} card${successCount > 1 ? 's' : ''}`);
+		}
+		if (failCount > 0) {
+			new Notice(`Failed to apply color to ${failCount} card${failCount > 1 ? 's' : ''}`);
+		}
 	}
 
 	private async refreshTimeline(): Promise<void> {

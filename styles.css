@@ -35,3 +35,63 @@ If your plugin does not need CSS, delete this file.
 .timeline-card.color-yellow .color-line {
 	background: var(--color-yellow, #fdd835);
 }
+
+/* Timeline context menu color submenu styles */
+.timeline-color-red {
+	color: var(--color-red, #e53935);
+}
+
+.timeline-color-blue {
+	color: var(--color-blue, #1e88e5);
+}
+
+.timeline-color-green {
+	color: var(--color-green, #43a047);
+}
+
+.timeline-color-yellow {
+	color: var(--color-yellow, #fdd835);
+}
+
+.timeline-color-clear {
+	color: var(--text-muted, #999);
+}
+
+/* Ensure the color circle icon is properly sized */
+.menu-item-icon.timeline-color-red svg,
+.menu-item-icon.timeline-color-blue svg,
+.menu-item-icon.timeline-color-green svg,
+.menu-item-icon.timeline-color-yellow svg,
+.menu-item-icon.timeline-color-clear svg {
+	width: 18px;
+	height: 18px;
+}
+
+/* Additional styling for the color submenu within Obsidian's menu system */
+.menu-item:has(.timeline-color-red),
+.menu-item:has(.timeline-color-blue),
+.menu-item:has(.timeline-color-green),
+.menu-item:has(.timeline-color-yellow),
+.menu-item:has(.timeline-color-clear) {
+	/* Ensure proper alignment within the menu */
+	align-items: center;
+}
+
+/* Style the submenu itself */
+.menu:has(.timeline-color-red) {
+	/* Submenu styling if needed */
+}
+
+/* Ensure the color circles appear as filled circles */
+.timeline-color-red svg circle,
+.timeline-color-blue svg circle,
+.timeline-color-green svg circle,
+.timeline-color-yellow svg circle {
+	fill: currentColor;
+}
+
+.timeline-color-clear svg circle {
+	fill: currentColor;
+	stroke: currentColor;
+	stroke-width: 1;
+}
