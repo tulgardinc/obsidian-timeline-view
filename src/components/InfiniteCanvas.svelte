@@ -132,6 +132,18 @@
 		animatedCursorX.set(snappedScreenX);
 	});
 
+	// Animated card boundary line positions for smooth resizing
+	const animatedStartX = tweened(0, { duration: 200, easing: cubicOut });
+	const animatedEndX = tweened(0, { duration: 200, easing: cubicOut });
+
+	// Update boundary line positions when selected card changes
+	$effect(() => {
+		if (selectedCard !== null) {
+			animatedStartX.set(selectedCard.startX);
+			animatedEndX.set(selectedCard.endX);
+		}
+	});
+
 	// Transform state
 	let scale = $state(1);
 	let translateX = $state(0);
@@ -932,9 +944,10 @@
 	{/if}
 	
 	<!-- Card boundary lines extending up to timeline for selected card -->
+	<!-- Uses animated positions to match card resize animations -->
 	{#if selectedCard !== null}
-		{@const startScreenX = TimeScaleManager.worldXToScreenRounded(selectedCard.startX, translateX)}
-		{@const endScreenX = TimeScaleManager.worldXToScreenRounded(selectedCard.endX, translateX)}
+		{@const startScreenX = TimeScaleManager.worldXToScreenRounded($animatedStartX, translateX)}
+		{@const endScreenX = TimeScaleManager.worldXToScreenRounded($animatedEndX, translateX)}
 		<div
 			class="card-boundary-line start"
 			class:active={activeResizeEdge === 'left'}

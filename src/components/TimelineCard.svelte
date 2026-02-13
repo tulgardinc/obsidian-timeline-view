@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
+	import { tweened } from "svelte/motion";
+	import { cubicOut } from "svelte/easing";
 	import { TimeScaleManager } from "../utils/TimeScaleManager";
 	import { getViewportContext } from "../contexts/ViewportContext";
 	import { CardCameraRenderer, type CardWorldData } from "../utils/CardCameraRenderer";
@@ -57,12 +59,21 @@
 	let worldY = $state(y);
 	let worldWidth = $state(width);
 	
+	// Animated world coordinates for smooth snapping during resize/move
+	// These tween toward the target snapped positions
+	const animatedX = tweened(x, { duration: 200, easing: cubicOut });
+	const animatedY = tweened(y, { duration: 200, easing: cubicOut });
+	const animatedWidth = tweened(width, { duration: 200, easing: cubicOut });
+	
 	// Sync props to local state when NOT dragging
 	$effect(() => {
 		if (!isResizing && !isMoving) {
 			worldX = x;
 			worldY = y;
 			worldWidth = width;
+			animatedX.set(x, { duration: 0 });
+			animatedY.set(y, { duration: 0 });
+			animatedWidth.set(width, { duration: 0 });
 		}
 	});
 
@@ -80,12 +91,13 @@
 		scale
 	});
 
-	// Card data in world coordinates - computed from local world state
+	// Card data for rendering - uses animated coordinates for smooth visual updates
+	// During resize/move, these smoothly interpolate to the snapped target positions
 	// Height is GRID_SPACING in world coordinates
 	let cardData = $derived<CardWorldData>({
-		x: worldX,
-		y: snappedY(),
-		width: worldWidth,
+		x: $animatedX,
+		y: $animatedY,
+		width: $animatedWidth,
 		height: GRID_SPACING
 	});
 
@@ -194,8 +206,10 @@
 				// Calculate delta from original width
 				const deltaWidth = newWidth - dragStartWidth;
 				
-				// Update local display state directly
+				// Update logical state
 				worldWidth = newWidth;
+				// Animate to new width
+				animatedWidth.set(newWidth);
 				
 				// Notify parent for optimistic updates with delta, but don't wait for response
 				if (onResize) {
@@ -225,9 +239,12 @@
 				// Calculate delta from original position
 				const deltaX = newX - dragStartX;
 				
-				// Update local display state directly
+				// Update logical state
 				worldX = newX;
 				worldWidth = newWidth;
+				// Animate to new position and width
+				animatedX.set(newX);
+				animatedWidth.set(newWidth);
 				
 				// Notify parent for optimistic updates with delta, but don't wait for response
 				if (onResize) {
@@ -260,7 +277,7 @@
 				newX = dragStartX;
 			}
 			
-			// Calculate new Y position and target layer
+			// Calculate new Y position and snap to layer grid
 			let newY = dragStartY + worldDeltaY;
 			let calculatedLayer = yToLayer(newY);
 			let newSnappedY = layerToY(calculatedLayer);
@@ -269,9 +286,12 @@
 			const deltaX = newX - dragStartX;
 			const deltaY = newSnappedY - dragStartY;
 			
-			// Update local display state directly
+			// Update logical state
 			worldX = newX;
 			worldY = newSnappedY;
+			// Animate to new position
+			animatedX.set(newX);
+			animatedY.set(newSnappedY);
 			
 			// Notify parent for optimistic updates with deltas
 			if (onMove) {
