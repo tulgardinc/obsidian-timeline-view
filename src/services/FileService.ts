@@ -154,6 +154,7 @@ export class FileService {
 			const y = LayerManager.layerToY(layer);
 
 			return {
+				type: 'note' as const,
 				file: item.file,
 				title: item.file.basename,
 				x,

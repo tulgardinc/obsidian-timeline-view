@@ -69,6 +69,9 @@ export class TimelineView extends ItemView {
 
 	// Viewport save timeout for debouncing
 	private viewportSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+	
+	// Timeline card refresh timeout for debouncing
+	private timelineCardRefreshTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// Track if we've rendered (to avoid double-render)
 	private hasRendered: boolean = false;
@@ -79,6 +82,20 @@ export class TimelineView extends ItemView {
 	constructor(leaf: WorkspaceLeaf) {
 		super(leaf);
 		this.historyManager = new TimelineHistoryManager();
+	}
+
+	/**
+	 * Type guard to check if a TimelineItem is a note card
+	 */
+	private isNoteItem(item: TimelineItem): item is { type: 'note'; file: TFile; title: string; x: number; y: number; width: number; dateStart: string; dateEnd: string; layer?: number; color?: TimelineColor } {
+		return item.type === 'note';
+	}
+
+	/**
+	 * Type guard to check if a TimelineItem is a timeline reference card
+	 */
+	private isTimelineItem(item: TimelineItem): item is { type: 'timeline'; timelineId: string; timelineName: string; title: string; x: number; y: number; width: number; dateStart: string; dateEnd: string; layer?: number; color?: TimelineColor } {
+		return item.type === 'timeline';
 	}
 
 	/**
@@ -172,6 +189,15 @@ export class TimelineView extends ItemView {
 	private daysBetween(start: TimelineDate, end: TimelineDate): number {
 		return end.getDaysFromEpoch() - start.getDaysFromEpoch();
 	}
+	
+	/**
+	 * Convert pixel position to date string
+	 */
+	private pixelsToDate(pixels: number): string {
+		const days = Math.round(TimeScaleManager.worldXToDay(pixels, this.timeScale));
+		const date = TimelineDate.fromDaysFromEpoch(days);
+		return date.toISOString();
+	}
 
 	/**
 	 * Check if a file path is within the configured root path
@@ -202,27 +228,230 @@ export class TimelineView extends ItemView {
 		const fileService = this.createFileService();
 		if (!fileService) return [];
 		
-		return await fileService.collectTimelineItems();
+		// Collect note cards from files
+		const noteItems = await fileService.collectTimelineItems();
+		
+		// Collect timeline cards from cache
+		const timelineCardItems: TimelineItem[] = [];
+		if (this.cacheService) {
+			const timelineCards = this.cacheService.getTimelineCards(this.timelineId);
+			if (timelineCards) {
+				for (const [referencedTimelineId, cardData] of Object.entries(timelineCards)) {
+					// Find the referenced timeline config
+					const plugin = (this.app as any).plugins?.plugins?.['timeline'];
+					const timelineConfig = plugin?.settings?.timelineViews?.find(
+						(t: { id: string }) => t.id === referencedTimelineId
+					);
+					
+					if (!timelineConfig) {
+						console.warn(`Timeline: Referenced timeline ${referencedTimelineId} not found, removing card`);
+						this.cacheService.removeTimelineCard(this.timelineId, referencedTimelineId);
+						continue;
+					}
+					
+					// Calculate the span of the referenced timeline
+					const span = await this.calculateTimelineSpan(referencedTimelineId, timelineConfig.rootPath);
+					if (!span) {
+						console.warn(`Timeline: Could not calculate span for ${timelineConfig.name}, skipping card`);
+						continue;
+					}
+					
+					// Create timeline card item
+					const startX = TimeScaleManager.dayToWorldX(span.startDay, this.timeScale);
+					const endX = TimeScaleManager.dayToWorldX(span.endDay, this.timeScale);
+					const width = endX - startX;
+					const y = LayerManager.layerToY(cardData.layer);
+					
+					const timelineItem: TimelineItem = {
+						type: 'timeline',
+						timelineId: referencedTimelineId,
+						timelineName: timelineConfig.name,
+						title: `Timeline: ${timelineConfig.name}`,
+						x: startX,
+						y: y,
+						width: width,
+						dateStart: TimelineDate.fromDaysFromEpoch(span.startDay).toISOString(),
+						dateEnd: TimelineDate.fromDaysFromEpoch(span.endDay).toISOString(),
+						layer: cardData.layer
+					};
+					
+					// Apply cached color if present
+					if (cardData.color) {
+						timelineItem.color = cardData.color;
+					}
+					
+					timelineCardItems.push(timelineItem);
+				}
+			}
+		}
+		
+		// Combine note items and timeline cards
+		return [...noteItems, ...timelineCardItems];
+	}
+	
+	/**
+	 * Calculate the time span of a timeline (min start date, max end date)
+	 */
+	private async calculateTimelineSpan(timelineId: string, rootPath: string): Promise<{ startDay: number; endDay: number } | null> {
+		// Create a temporary file service to collect items from the referenced timeline
+		const tempService = new FileService({
+			app: this.app,
+			timeScale: this.timeScale,
+			rootPath: rootPath,
+			timelineId: timelineId,
+			cacheService: this.cacheService!
+		});
+		
+		try {
+			const items = await tempService.collectTimelineItems();
+			if (items.length === 0) return null;
+			
+			// Find min start and max end
+			let minStartDay = Infinity;
+			let maxEndDay = -Infinity;
+			
+			for (const item of items) {
+				const startDate = this.parseDate(item.dateStart);
+				const endDate = this.parseDate(item.dateEnd);
+				
+				if (!startDate || !endDate) continue;
+				
+				const startDay = startDate.getDaysFromEpoch();
+				const endDay = endDate.getDaysFromEpoch();
+				
+				if (startDay < minStartDay) minStartDay = startDay;
+				if (endDay > maxEndDay) maxEndDay = endDay;
+			}
+			
+			if (minStartDay === Infinity || maxEndDay === -Infinity) return null;
+			
+			return { startDay: minStartDay, endDay: maxEndDay };
+		} catch (error) {
+			console.error(`Timeline: Error calculating span for ${timelineId}:`, error);
+			return null;
+		}
+	}
+	
+	/**
+	 * Refresh timeline card spans asynchronously
+	 * This checks if any referenced timelines have changed their span and updates the cards
+	 */
+	private async refreshTimelineCardsAsync(): Promise<void> {
+		if (!this.cacheService) return;
+		
+		// Get current timeline cards from items
+		const currentTimelineCards = this.timelineItems.filter(item => this.isTimelineItem(item));
+		if (currentTimelineCards.length === 0) return;
+		
+		console.log(`Timeline: Refreshing ${currentTimelineCards.length} timeline card(s) asynchronously`);
+		
+		// Recalculate spans for all timeline cards concurrently
+		const updatePromises = currentTimelineCards.map(async (card) => {
+			const timelineCard = card as { type: 'timeline'; timelineId: string; timelineName: string; layer?: number; dateStart: string; dateEnd: string; x: number; y: number; width: number; title: string };
+			
+			// Find the referenced timeline config
+			const plugin = (this.app as any).plugins?.plugins?.['timeline'];
+			const timelineConfig = plugin?.settings?.timelineViews?.find(
+				(t: { id: string }) => t.id === timelineCard.timelineId
+			);
+			
+			if (!timelineConfig) {
+				console.warn(`Timeline: Referenced timeline ${timelineCard.timelineId} not found during refresh`);
+				return null;
+			}
+			
+			// Recalculate span
+			const span = await this.calculateTimelineSpan(timelineCard.timelineId, timelineConfig.rootPath);
+			if (!span) {
+				console.warn(`Timeline: Could not recalculate span for ${timelineConfig.name}`);
+				return null;
+			}
+			
+			// Check if span changed
+			const oldStartDay = TimelineDate.fromString(timelineCard.dateStart)?.getDaysFromEpoch();
+			const oldEndDay = TimelineDate.fromString(timelineCard.dateEnd)?.getDaysFromEpoch();
+			
+			if (oldStartDay === span.startDay && oldEndDay === span.endDay) {
+				// No change needed
+				return null;
+			}
+			
+			// Calculate new position
+			const startX = TimeScaleManager.dayToWorldX(span.startDay, this.timeScale);
+			const endX = TimeScaleManager.dayToWorldX(span.endDay, this.timeScale);
+			const width = endX - startX;
+			
+			return {
+				timelineId: timelineCard.timelineId,
+				newDateStart: TimelineDate.fromDaysFromEpoch(span.startDay).toISOString(),
+				newDateEnd: TimelineDate.fromDaysFromEpoch(span.endDay).toISOString(),
+				newX: startX,
+				newWidth: width
+			};
+		});
+		
+		// Wait for all calculations to complete
+		const updates = (await Promise.all(updatePromises)).filter(update => update !== null);
+		
+		if (updates.length === 0) {
+			console.log('Timeline: No timeline card updates needed');
+			return;
+		}
+		
+		console.log(`Timeline: Updating ${updates.length} timeline card(s) with new spans`);
+		
+		// Apply updates to timelineItems
+		for (const update of updates) {
+			const itemIndex = this.timelineItems.findIndex(
+				item => this.isTimelineItem(item) && item.timelineId === update.timelineId
+			);
+			
+			if (itemIndex !== -1) {
+				const item = this.timelineItems[itemIndex]!;
+				if (this.isTimelineItem(item)) {
+					this.timelineItems[itemIndex] = {
+						...item,
+						x: update.newX,
+						width: update.newWidth,
+						dateStart: update.newDateStart,
+						dateEnd: update.newDateEnd
+					};
+				}
+			}
+		}
+		
+		// Refresh the component to show updates
+		if (this.component?.refreshItems) {
+			this.component.refreshItems(this.timelineItems);
+		}
+	}
+	
+	/**
+	 * Schedule a debounced refresh of timeline cards
+	 */
+	private scheduleTimelineCardRefresh(): void {
+		if (this.timelineCardRefreshTimeout) {
+			clearTimeout(this.timelineCardRefreshTimeout);
+		}
+		
+		this.timelineCardRefreshTimeout = setTimeout(() => {
+			void this.refreshTimelineCardsAsync();
+		}, 300); // 300ms debounce
 	}
 
-	private pixelsToDate(pixels: number): string {
-		const days = Math.round(TimeScaleManager.worldXToDay(pixels, this.timeScale));
-		const date = TimelineDate.fromDaysFromEpoch(days);
-		return date.toISOString();
-	}
-
+	/**
+	 * Recalculate item positions when time scale changes
+	 */
 	private recalculateItemPositions(): void {
 		for (let i = 0; i < this.timelineItems.length; i++) {
 			const item = this.timelineItems[i]!;
 			
 			const dateStart = this.parseDate(item.dateStart);
 			if (!dateStart) continue;
+			
 			const daysFromStart = dateStart.getDaysFromEpoch();
 			const newX = TimeScaleManager.dayToWorldX(daysFromStart, this.timeScale);
-			
-			const dateEnd = this.parseDate(item.dateEnd);
-			if (!dateEnd) continue;
-			const duration = dateEnd.getDaysFromEpoch() - dateStart.getDaysFromEpoch();
+			const duration = this.daysBetween(dateStart, this.parseDate(item.dateEnd) || dateStart);
 			const newWidth = Math.max(duration, 1) * this.timeScale;
 			
 			this.timelineItems[i] = {
@@ -231,567 +460,204 @@ export class TimelineView extends ItemView {
 				width: newWidth
 			};
 		}
-		
-		// Update selection data for active item when time scale changes
-		if (this.activeIndex !== null && this.selectedCardData) {
-			const item = this.timelineItems[this.activeIndex];
-			if (item) {
-				const scaleLevel = TimeScaleManager.getScaleLevel(this.timeScale);
-				const daysStart = Math.round(TimeScaleManager.worldXToDay(item.x, this.timeScale));
-				const daysEnd = Math.round(TimeScaleManager.worldXToDay(item.x + item.width, this.timeScale));
-				
-				this.selectedCardData = {
-					...this.selectedCardData,
-					startX: item.x,
-					endX: item.x + item.width,
-					startDate: TimeScaleManager.formatDateForLevel(daysStart, scaleLevel),
-					endDate: TimeScaleManager.formatDateForLevel(daysEnd, scaleLevel)
-				};
-				
-				this.updateSelectionInComponent();
-			}
-		}
 	}
 
-	private async updateItemDates(index: number, newX: number, newWidth: number): Promise<void> {
-		if (index < 0 || index >= this.timelineItems.length) {
-			console.error('Timeline: Invalid item index', index);
-			return;
+	/**
+	 * Handle multi-select resize operation
+	 */
+	private async updateItemsResize(index: number, edge: 'left' | 'right', deltaX: number): Promise<void> {
+		// For now, just handle single item resize
+		// This is a simplified implementation
+		const item = this.timelineItems[index];
+		if (!item) return;
+		
+		// Only note cards can be resized
+		if (!this.isNoteItem(item)) return;
+		
+		// Get current values
+		let newX = item.x;
+		let newWidth = item.width;
+		
+		if (edge === 'left') {
+			newX = item.x + deltaX;
+			newWidth = item.width - deltaX;
+		} else {
+			newWidth = item.width + deltaX;
 		}
 		
-		const item = this.timelineItems[index]!;
-		
-		const newDateStart = this.pixelsToDate(newX);
-		const endPixels = newX + newWidth;
-		const newDateEnd = this.pixelsToDate(endPixels);
-		
-		const previousState: TimelineState = {
-			dateStart: item.dateStart,
-			dateEnd: item.dateEnd,
-			layer: item.layer ?? 0
-		};
-		
-		try {
-			const content = await this.app.vault.read(item.file);
-			
-			const newContent = content
-				.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
-				.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
-			
-			await this.app.vault.modify(item.file, newContent);
-			
-			this.timelineItems[index] = {
-				...item,
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				x: newX,
-				width: newWidth
-			};
-			
-			const newState: TimelineState = {
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				layer: item.layer ?? 0
-			};
-			this.historyManager.record(item.file, previousState, newState, 'resize');
-			
-			this.expectedFileStates.set(item.file.path, {
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				timestamp: Date.now()
-			});
-		} catch (error) {
-			console.error(`Timeline: Failed to update ${item.file.basename}:`, error);
-			new Notice(`Failed to update ${item.file.basename}: ${error}`);
-		}
-	}
-
-	private async updateItemPosition(index: number, newX: number, newY: number): Promise<void> {
-		if (index < 0 || index >= this.timelineItems.length) {
-			console.error('Timeline: Invalid item index', index);
-			return;
-		}
-		
-		const item = this.timelineItems[index]!;
-		
-		const newDateStart = this.pixelsToDate(newX);
-		const endPixels = newX + item.width;
-		const newDateEnd = this.pixelsToDate(endPixels);
-		
-		const previousState: TimelineState = {
-			dateStart: item.dateStart,
-			dateEnd: item.dateEnd,
-			layer: item.layer ?? 0
-		};
-		
-		try {
-			const content = await this.app.vault.read(item.file);
-			
-			const newContent = content
-				.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
-				.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
-			
-			await this.app.vault.modify(item.file, newContent);
-			
-			this.timelineItems[index] = {
-				...item,
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				x: newX,
-				y: newY
-			};
-			
-			const newState: TimelineState = {
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				layer: item.layer ?? 0
-			};
-			this.historyManager.record(item.file, previousState, newState, 'move');
-			
-			this.expectedFileStates.set(item.file.path, {
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				timestamp: Date.now()
-			});
-		} catch (error) {
-			console.error(`Timeline: Failed to move ${item.file.basename}:`, error);
-			new Notice(`Failed to move ${item.file.basename}: ${error}`);
-		}
-	}
-
-	private async updateItemLayer(index: number, targetLayer: number, newX: number, newWidth: number): Promise<void> {
-		if (index < 0 || index >= this.timelineItems.length) {
-			console.error('Timeline: Invalid item index', index);
-			return;
-		}
-		
-		const item = this.timelineItems[index]!;
-		
-		const previousState: TimelineState = {
-			dateStart: item.dateStart,
-			dateEnd: item.dateEnd,
-			layer: item.layer ?? 0
-		};
-		
+		// Calculate new dates
 		const newDateStart = this.pixelsToDate(newX);
 		const newDateEnd = this.pixelsToDate(newX + newWidth);
-		const dateStart = this.parseDate(newDateStart);
-		const dateEnd = this.parseDate(newDateEnd);
 		
-		if (!dateStart || !dateEnd) {
-			console.error(`Timeline: Invalid dates for ${item.file.basename}`);
-			return;
-		}
+		// Update the item
+		this.timelineItems[index] = {
+			...item,
+			x: newX,
+			width: newWidth,
+			dateStart: newDateStart,
+			dateEnd: newDateEnd
+		};
 		
-		let finalLayer = targetLayer;
-		let hasCollision = false;
-		
-		for (const otherItem of this.timelineItems) {
-			if (otherItem.file.path === item.file.path) continue;
-			if (otherItem.layer !== targetLayer) continue;
-			
-			const otherDateStart = this.parseDate(otherItem.dateStart);
-			const otherDateEnd = this.parseDate(otherItem.dateEnd);
-			
-			if (!otherDateStart || !otherDateEnd) continue;
-			
-			if (LayerManager.rangesOverlap(dateStart, dateEnd, otherDateStart, otherDateEnd)) {
-				hasCollision = true;
-				break;
+		// Update file if it's a note
+		if (this.isNoteItem(item)) {
+			try {
+				const content = await this.app.vault.read(item.file);
+				const newContent = content
+					.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
+					.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
+				await this.app.vault.modify(item.file, newContent);
+			} catch (error) {
+				console.error(`Timeline: Failed to update file:`, error);
 			}
 		}
 		
-		if (hasCollision) {
-			const maxSearch = Math.max(this.timelineItems.length * 2, 100);
-			let found = false;
-			
-			for (let i = 1; i < maxSearch && !found; i++) {
-				const layerAbove = targetLayer + i;
-				let layerBusy = false;
-				
-				for (const otherItem of this.timelineItems) {
-					if (otherItem.file.path === item.file.path) continue;
-					if (otherItem.layer !== layerAbove) continue;
-					
-					const otherDateStart = this.parseDate(otherItem.dateStart);
-					const otherDateEnd = this.parseDate(otherItem.dateEnd);
-					
-					if (!otherDateStart || !otherDateEnd) continue;
-					
-					if (LayerManager.rangesOverlap(dateStart, dateEnd, otherDateStart, otherDateEnd)) {
-						layerBusy = true;
-						break;
-					}
-				}
-				
-				if (!layerBusy) {
-					finalLayer = layerAbove;
-					found = true;
-					break;
-				}
-				
-				const layerBelow = targetLayer - i;
-				layerBusy = false;
-				
-				for (const otherItem of this.timelineItems) {
-					if (otherItem.file.path === item.file.path) continue;
-					if (otherItem.layer !== layerBelow) continue;
-					
-					const otherDateStart = this.parseDate(otherItem.dateStart);
-					const otherDateEnd = this.parseDate(otherItem.dateEnd);
-					
-					if (!otherDateStart || !otherDateEnd) continue;
-					
-					if (LayerManager.rangesOverlap(dateStart, dateEnd, otherDateStart, otherDateEnd)) {
-						layerBusy = true;
-						break;
-					}
-				}
-				
-				if (!layerBusy) {
-					finalLayer = layerBelow;
-					found = true;
-					break;
-				}
-			}
-			
-			if (!found) {
-				console.warn(`Timeline: No available layer found for ${item.file.basename}, using target layer ${targetLayer} with overlap`);
-			}
-		}
-		
-		const newY = LayerManager.layerToY(finalLayer);
-		
-		try {
-			// Update dates in file (layer is now in cache only)
-			const content = await this.app.vault.read(item.file);
-			const newContent = content
-				.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
-				.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
-			
-			await this.app.vault.modify(item.file, newContent);
-			
-			// Update layer in cache
-			if (this.cacheService) {
-				const noteId = this.cacheService.getNoteId(item.file);
-				if (noteId) {
-					this.cacheService.setNoteLayer(this.timelineId, noteId, finalLayer, item.file.path);
-				}
-			}
-			
-			this.timelineItems[index] = {
-				...item,
-				x: newX,
-				width: newWidth,
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				layer: finalLayer,
-				y: newY
-			};
-			
-			const newState: TimelineState = {
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				layer: finalLayer
-			};
-			this.historyManager.record(item.file, previousState, newState, 'layer-change');
-			
-			this.expectedFileStates.set(item.file.path, {
-				dateStart: newDateStart,
-				dateEnd: newDateEnd,
-				timestamp: Date.now()
-			});
-			
-			if (this.component && this.component.refreshItems) {
-				this.component.refreshItems(this.timelineItems);
-			}
-		} catch (error) {
-			console.error(`Timeline: Failed to update layer for ${item.file.basename}:`, error);
-			new Notice(`Failed to update layer for ${item.file.basename}: ${error}`);
+		// Refresh component
+		if (this.component?.refreshItems) {
+			this.component.refreshItems(this.timelineItems);
 		}
 	}
 
 	/**
-	 * Multi-select move: Move all selected items by the same delta
-	 * Handles layer changes and updates the cache
+	 * Handle multi-select move operation
 	 */
-	private async updateItemsMove(activeIndex: number, deltaX: number, deltaY: number): Promise<void> {
-		// Get all selected items including the active one
-		const indicesToMove = Array.from(this.selectedIndices).filter(index => 
-			index >= 0 && index < this.timelineItems.length
-		);
+	private async updateItemsMove(index: number, deltaX: number, deltaY: number): Promise<void> {
+		const item = this.timelineItems[index];
+		if (!item) return;
 		
-		if (indicesToMove.length === 0) return;
+		// Calculate new position
+		const newX = item.x + deltaX;
+		const newY = item.y + deltaY;
 		
-		// Move all selected items by the same delta
-		for (const index of indicesToMove) {
-			const item = this.timelineItems[index]!;
-			const newX = item.x + deltaX;
-			const newY = item.y + deltaY;
-			
-			// Calculate dates from new X position
-			const newDateStart = this.pixelsToDate(newX);
-			const endPixels = newX + item.width;
-			const newDateEnd = this.pixelsToDate(endPixels);
-			
-			// Parse dates for collision detection
-			const dateStart = this.parseDate(newDateStart);
-			const dateEnd = this.parseDate(newDateEnd);
-			
-			if (!dateStart || !dateEnd) {
-				console.error(`Timeline: Invalid dates for ${item.file.basename}`);
-				continue;
-			}
-			
-			// Calculate target layer from new Y position
-			const targetLayer = LayerManager.yToLayer(newY);
-			
-			// Find available layer (checking collision with other items)
-			const finalLayer = this.findAvailableLayerForMove(index, targetLayer, dateStart, dateEnd);
-			
-			// Recalculate Y to be snapped to the final layer
-			const finalY = LayerManager.layerToY(finalLayer);
-			
-			const previousState: TimelineState = {
-				dateStart: item.dateStart,
-				dateEnd: item.dateEnd,
-				layer: item.layer ?? 0
-			};
-			
+		// Calculate new dates from X position
+		const newDateStart = this.pixelsToDate(newX);
+		const newDateEnd = this.pixelsToDate(newX + item.width);
+		
+		// Calculate new layer from Y position
+		const newLayer = LayerManager.yToLayer(newY);
+		const snappedY = LayerManager.layerToY(newLayer);
+		
+		// Update the item
+		this.timelineItems[index] = {
+			...item,
+			x: newX,
+			y: snappedY,
+			dateStart: newDateStart,
+			dateEnd: newDateEnd,
+			layer: newLayer
+		};
+		
+		// Update file if it's a note
+		if (this.isNoteItem(item)) {
 			try {
 				const content = await this.app.vault.read(item.file);
-				
 				const newContent = content
 					.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
 					.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
-				
 				await this.app.vault.modify(item.file, newContent);
 				
 				// Update layer in cache
-				if (this.cacheService && finalLayer !== item.layer) {
+				if (this.cacheService) {
 					const noteId = this.cacheService.getNoteId(item.file);
 					if (noteId) {
-						this.cacheService.setNoteLayer(this.timelineId, noteId, finalLayer, item.file.path);
+						this.cacheService.setNoteLayer(this.timelineId, noteId, newLayer, item.file.path);
 					}
 				}
-				
-				this.timelineItems[index] = {
-					...item,
-					dateStart: newDateStart,
-					dateEnd: newDateEnd,
-					x: newX,
-					y: finalY,
-					layer: finalLayer
-				};
-				
-				const newState: TimelineState = {
-					dateStart: newDateStart,
-					dateEnd: newDateEnd,
-					layer: finalLayer
-				};
-				this.historyManager.record(item.file, previousState, newState, 'move');
-				
-				this.expectedFileStates.set(item.file.path, {
-					dateStart: newDateStart,
-					dateEnd: newDateEnd,
-					timestamp: Date.now()
-				});
 			} catch (error) {
-				console.error(`Timeline: Failed to move ${item.file.basename}:`, error);
-				new Notice(`Failed to move ${item.file.basename}: ${error}`);
+				console.error(`Timeline: Failed to update file:`, error);
 			}
 		}
 		
-		if (this.component && this.component.refreshItems) {
+		// Refresh component
+		if (this.component?.refreshItems) {
 			this.component.refreshItems(this.timelineItems);
 		}
-		
-		// Update selection data for the active item
-		if (this.activeIndex !== null) {
-			this.updateSelectedCardData(this.activeIndex);
-			this.updateSelectionInComponent();
-		}
-	}
-	
-	/**
-	 * Find available layer for a move operation
-	 * Similar to findAvailableLayer but excludes the item being moved
-	 */
-	private findAvailableLayerForMove(itemIndex: number, targetLayer: number, dateStart: TimelineDate, dateEnd: TimelineDate): number {
-		// Try target layer first
-		if (!this.isLayerBusyExcluding(itemIndex, targetLayer, dateStart, dateEnd)) {
-			return targetLayer;
-		}
-		
-		// Alternating search
-		const maxSearch = Math.max(this.timelineItems.length * 2, 100);
-		for (let i = 1; i < maxSearch; i++) {
-			// Try layer above
-			const layerAbove = targetLayer + i;
-			if (!this.isLayerBusyExcluding(itemIndex, layerAbove, dateStart, dateEnd)) {
-				return layerAbove;
-			}
-			// Try layer below
-			const layerBelow = targetLayer - i;
-			if (!this.isLayerBusyExcluding(itemIndex, layerBelow, dateStart, dateEnd)) {
-				return layerBelow;
-			}
-		}
-		
-		// Fallback to target layer
-		console.warn(`Timeline: No available layer found, using target layer ${targetLayer} with overlap`);
-		return targetLayer;
-	}
-	
-	/**
-	 * Check if a layer is busy, excluding a specific item index
-	 */
-	private isLayerBusyExcluding(excludeIndex: number, layer: number, dateStart: TimelineDate, dateEnd: TimelineDate): boolean {
-		for (let i = 0; i < this.timelineItems.length; i++) {
-			if (i === excludeIndex) continue;
-			
-			const item = this.timelineItems[i];
-			if (!item || item.layer !== layer) continue;
-			
-			const itemStart = this.parseDate(item.dateStart);
-			const itemEnd = this.parseDate(item.dateEnd);
-			
-			if (!itemStart || !itemEnd) continue;
-			
-			if (LayerManager.rangesOverlap(dateStart, dateEnd, itemStart, itemEnd)) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/**
-	 * Multi-select resize: Resize all selected items by the same edge delta
-	 * Each card is clamped independently to the minimum width for the current scale level
+	 * Handle layer change operation
 	 */
-	private async updateItemsResize(activeIndex: number, edge: 'left' | 'right', deltaX: number): Promise<void> {
-		// Get all selected items including the active one
-		const indicesToResize = Array.from(this.selectedIndices).filter(index => 
-			index >= 0 && index < this.timelineItems.length
-		);
+	private async updateItemLayer(index: number, newLayer: number, newX: number, newWidth: number): Promise<void> {
+		const item = this.timelineItems[index];
+		if (!item) return;
 		
-		if (indicesToResize.length === 0) return;
+		const newY = LayerManager.layerToY(newLayer);
+		const newDateStart = this.pixelsToDate(newX);
+		const newDateEnd = this.pixelsToDate(newX + newWidth);
 		
-		// Minimum width is based on the current scale level's unit
-		// (e.g., 1 day, 1 month, 1 year, etc. depending on zoom)
-		const MIN_WIDTH = TimeScaleManager.getMinResizeWidth(this.timeScale);
+		// Update the item
+		this.timelineItems[index] = {
+			...item,
+			x: newX,
+			y: newY,
+			width: newWidth,
+			dateStart: newDateStart,
+			dateEnd: newDateEnd,
+			layer: newLayer
+		};
 		
-		// Resize all selected items by the same delta on the same edge
-		// Each card clamps independently - cards that would go below minimum stay at minimum
-		for (const index of indicesToResize) {
-			const item = this.timelineItems[index]!;
-			
-			let newX = item.x;
-			let newWidth = item.width;
-			
-			if (edge === 'left') {
-				// Moving left edge: adjust x and width by delta
-				newX = item.x + deltaX;
-				newWidth = item.width - deltaX;
-			} else {
-				// Moving right edge: adjust width by delta
-				newWidth = item.width + deltaX;
+		// Update cache based on item type
+		if (this.isNoteItem(item) && this.cacheService) {
+			const noteId = this.cacheService.getNoteId(item.file);
+			if (noteId) {
+				this.cacheService.setNoteLayer(this.timelineId, noteId, newLayer, item.file.path);
 			}
 			
-			// Per-card minimum width enforcement: clamp to scale-appropriate minimum
-			// This allows multi-select resize where some cards may hit minimum while others continue
-			if (newWidth < MIN_WIDTH) {
-				newWidth = MIN_WIDTH;
-				if (edge === 'left') {
-					// For left edge resize, adjust x to keep right edge fixed when clamping
-					newX = item.x + item.width - MIN_WIDTH;
-				}
-				// Note: We don't prevent the resize operation - other cards may still resize normally
-			}
-			
-			const newDateStart = this.pixelsToDate(newX);
-			const endPixels = newX + newWidth;
-			const newDateEnd = this.pixelsToDate(endPixels);
-			
-			const previousState: TimelineState = {
-				dateStart: item.dateStart,
-				dateEnd: item.dateEnd,
-				layer: item.layer ?? 0
-			};
-			
+			// Update file
 			try {
 				const content = await this.app.vault.read(item.file);
-				
 				const newContent = content
 					.replace(/date-start:\s*\S+/, `date-start: ${newDateStart}`)
 					.replace(/date-end:\s*\S+/, `date-end: ${newDateEnd}`);
-				
 				await this.app.vault.modify(item.file, newContent);
-				
-				this.timelineItems[index] = {
-					...item,
-					dateStart: newDateStart,
-					dateEnd: newDateEnd,
-					x: newX,
-					width: newWidth
-				};
-				
-				const newState: TimelineState = {
-					dateStart: newDateStart,
-					dateEnd: newDateEnd,
-					layer: item.layer ?? 0
-				};
-				this.historyManager.record(item.file, previousState, newState, 'resize');
-				
-				this.expectedFileStates.set(item.file.path, {
-					dateStart: newDateStart,
-					dateEnd: newDateEnd,
-					timestamp: Date.now()
-				});
 			} catch (error) {
-				console.error(`Timeline: Failed to resize ${item.file.basename}:`, error);
-				new Notice(`Failed to resize ${item.file.basename}: ${error}`);
+				console.error(`Timeline: Failed to update file:`, error);
 			}
+		} else if (this.isTimelineItem(item) && this.cacheService) {
+			this.cacheService.setTimelineCardLayer(this.timelineId, item.timelineId, newLayer);
 		}
 		
-		if (this.component && this.component.refreshItems) {
+		// Refresh component
+		if (this.component?.refreshItems) {
 			this.component.refreshItems(this.timelineItems);
-		}
-		
-		// Update selection data for the active item
-		if (this.activeIndex !== null) {
-			this.updateSelectedCardData(this.activeIndex);
-			this.updateSelectionInComponent();
 		}
 	}
 
+	/**
+	 * Open a file or timeline
+	 */
 	private async openFile(index: number): Promise<void> {
-		if (index < 0 || index >= this.timelineItems.length) {
-			console.error('Timeline: Invalid item index for open', index);
-			return;
-		}
+		const item = this.timelineItems[index];
+		if (!item) return;
 		
-		const item = this.timelineItems[index]!;
-		
-		try {
+		if (this.isTimelineItem(item)) {
+			// Open referenced timeline
+			const plugin = (this.app as any).plugins?.plugins?.['timeline'];
+			if (!plugin) {
+				new Notice('Timeline plugin not available');
+				return;
+			}
+			
+			const timelineConfig = plugin.settings?.timelineViews?.find(
+				(t: { id: string }) => t.id === item.timelineId
+			);
+			
+			if (!timelineConfig) {
+				new Notice(`Timeline "${item.timelineName}" not found`);
+				return;
+			}
+			
+			await plugin.openTimelineView(timelineConfig);
+		} else if (this.isNoteItem(item)) {
+			// Open file
 			const file = this.app.vault.getAbstractFileByPath(item.file.path);
 			if (file && file instanceof TFile) {
+				// Check if already open
 				let existingLeaf: WorkspaceLeaf | null = null;
-				
 				this.app.workspace.iterateAllLeaves((leaf: WorkspaceLeaf) => {
-					const view = leaf.view as { 
-						file?: { path: string }; 
-						getState?: () => { file?: string }; 
-					};
-					
-					const leafFilePath = view?.file?.path || 
-									 view?.getState?.()?.file;
-					
-					if (leafFilePath === item.file.path) {
+					const view = leaf.view as { file?: { path: string } };
+					if (view?.file?.path === item.file.path) {
 						existingLeaf = leaf;
-						return true;
 					}
-					return false;
 				});
 				
 				if (existingLeaf) {
@@ -800,13 +666,7 @@ export class TimelineView extends ItemView {
 					const leaf = this.app.workspace.getLeaf('tab');
 					await leaf.openFile(file);
 				}
-			} else {
-				console.error(`Timeline: Could not find file ${item.file.path}`);
-				new Notice(`Could not find file: ${item.file.basename}`);
 			}
-		} catch (error) {
-			console.error(`Timeline: Failed to open ${item.file.basename}:`, error);
-			new Notice(`Failed to open ${item.file.basename}: ${error}`);
 		}
 	}
 
@@ -929,6 +789,7 @@ Created from timeline view.
 			const y = LayerManager.layerToY(finalLayer);
 
 			const newItem: TimelineItem = {
+				type: 'note',
 				file: newFile,
 				title: newFile.basename,
 				x: startX,
@@ -1133,34 +994,67 @@ Created from timeline view.
 
 		menu.addSeparator();
 
-		menu.addItem((itemMenu) => {
-			itemMenu
-				.setTitle("Delete")
-				.setIcon("trash")
-				.onClick(() => {
-					// If the clicked card is not in the current selection, select only that card
-					// Otherwise, keep the existing multi-selection
-					if (!this.selectedIndices.has(index)) {
-						this.selectCard(index);
-					} else {
-						// Just ensure this is the active item for context
-						this.activeIndex = index;
-						this.updateSelectedCardData(index);
-					}
-					this.handleDeleteCard();
-				});
-		});
+		// For timeline cards, show "Remove" instead of "Delete"
+		if (this.isTimelineItem(item)) {
+			menu.addItem((itemMenu) => {
+				itemMenu
+					.setTitle("Remove from view")
+					.setIcon("trash")
+					.onClick(() => {
+						this.handleRemoveTimelineCard(item.timelineId);
+					});
+			});
+		} else {
+			menu.addItem((itemMenu) => {
+				itemMenu
+					.setTitle("Delete")
+					.setIcon("trash")
+					.onClick(() => {
+						// If the clicked card is not in the current selection, select only that card
+						// Otherwise, keep the existing multi-selection
+						if (!this.selectedIndices.has(index)) {
+							this.selectCard(index);
+						} else {
+							// Just ensure this is the active item for context
+							this.activeIndex = index;
+							this.updateSelectedCardData(index);
+						}
+						this.handleDeleteCard();
+					});
+			});
+		}
 
 		menu.showAtMouseEvent(event);
 	}
 
+	private handleRemoveTimelineCard(timelineId: string): void {
+		// Confirm removal
+		const modal = new DeleteConfirmModal(
+			this.app, 
+			null as any, // No file for timeline cards
+			async (action: DeleteAction) => {
+				if (action === 'remove-from-timeline') {
+					await this.removeTimelineCard(timelineId);
+				}
+			},
+			'Remove timeline from view?',
+			1,
+			'This will remove the timeline card from the current view but will not delete the timeline itself.',
+			false // Don't show trash option
+		);
+		modal.open();
+	}
+
 	private handleDeleteCard(): void {
-		// Get all selected items
+		// Get all selected items that are note cards (not timeline cards)
 		const selectedItems = Array.from(this.selectedIndices)
 			.filter(index => index >= 0 && index < this.timelineItems.length)
-			.map(index => this.timelineItems[index]!);
+			.map(index => this.timelineItems[index]!)
+			.filter(item => this.isNoteItem(item));
 		
 		if (selectedItems.length === 0) {
+			// If only timeline cards are selected, nothing to delete
+			new Notice('Timeline cards cannot be deleted - use Remove instead');
 			return;
 		}
 		
@@ -1311,7 +1205,122 @@ Created from timeline view.
 	}
 
 	/**
-	 * Apply color to all selected cards
+	 * Add a timeline card to the current timeline
+	 */
+	async addTimelineCard(timelineId: string, timelineName: string): Promise<void> {
+		if (!this.cacheService) {
+			new Notice('Timeline cache service not available');
+			return;
+		}
+		
+		// Check if this timeline card already exists
+		const existingCards = this.cacheService.getTimelineCards(this.timelineId);
+		if (existingCards?.[timelineId]) {
+			new Notice(`Timeline "${timelineName}" is already added to this view`);
+			return;
+		}
+		
+		// Find the referenced timeline config
+		const plugin = (this.app as any).plugins?.plugins?.['timeline'];
+		const timelineConfig = plugin?.settings?.timelineViews?.find(
+			(t: { id: string }) => t.id === timelineId
+		);
+		
+		if (!timelineConfig) {
+			new Notice(`Timeline "${timelineName}" configuration not found`);
+			return;
+		}
+		
+		// Calculate the span of the referenced timeline
+		const span = await this.calculateTimelineSpan(timelineId, timelineConfig.rootPath);
+		if (!span) {
+			new Notice(`Could not calculate span for timeline "${timelineName}"`);
+			return;
+		}
+		
+		// Convert to TimelineDate objects for overlap checking
+		const startDate = TimelineDate.fromDaysFromEpoch(span.startDay);
+		const endDate = TimelineDate.fromDaysFromEpoch(span.endDay);
+		
+		// Find an available layer using the same overlap test as note cards
+		const targetLayer = 0;
+		const finalLayer = this.findAvailableLayerForTimelineSpan(startDate, endDate, targetLayer);
+		
+		// Add to cache
+		this.cacheService.addTimelineCard(this.timelineId, timelineId, finalLayer);
+		
+		// Refresh to show the new timeline card
+		await this.refreshTimeline();
+		
+		new Notice(`Added timeline "${timelineName}" to view`);
+	}
+	
+	/**
+	 * Find an available layer for a timeline card (checks overlap with ALL cards)
+	 */
+	private findAvailableLayerForTimelineSpan(startDate: TimelineDate, endDate: TimelineDate, targetLayer: number): number {
+		// Check if target layer is available (no overlap with any card)
+		if (!this.isLayerBusyForTimelineSpan(startDate, endDate, targetLayer)) {
+			return targetLayer;
+		}
+		
+		// Try alternating layers (+1, -1, +2, -2, etc.) like note cards
+		const maxSearch = Math.max(this.timelineItems.length * 2, 100);
+		for (let i = 1; i < maxSearch; i++) {
+			// Try above
+			if (!this.isLayerBusyForTimelineSpan(startDate, endDate, targetLayer + i)) {
+				return targetLayer + i;
+			}
+			// Try below
+			if (!this.isLayerBusyForTimelineSpan(startDate, endDate, targetLayer - i)) {
+				return targetLayer - i;
+			}
+		}
+		
+		// Fallback to target layer (will overlap)
+		return targetLayer;
+	}
+	
+	/**
+	 * Check if a layer is busy for a timeline card (checks overlap with ALL cards, not just timeline cards)
+	 */
+	private isLayerBusyForTimelineSpan(startDate: TimelineDate, endDate: TimelineDate, layer: number): boolean {
+		// Check all existing timeline items (both notes and timeline cards)
+		for (const item of this.timelineItems) {
+			if (item.layer !== layer) continue;
+			
+			const itemStart = this.parseDate(item.dateStart);
+			const itemEnd = this.parseDate(item.dateEnd);
+			
+			if (!itemStart || !itemEnd) continue;
+			
+			// Check for date overlap using the same logic as note cards
+			if (LayerManager.rangesOverlap(startDate, endDate, itemStart, itemEnd)) {
+				return true;
+			}
+		}
+		
+		return false;
+	}
+	
+	/**
+	 * Remove a timeline card from the current view
+	 */
+	async removeTimelineCard(timelineId: string): Promise<void> {
+		if (!this.cacheService) {
+			new Notice('Timeline cache service not available');
+			return;
+		}
+		
+		this.cacheService.removeTimelineCard(this.timelineId, timelineId);
+		this.clearSelection();
+		await this.refreshTimeline();
+		
+		new Notice('Timeline removed from view');
+	}
+
+	/**
+	 * Apply color to all selected cards (both note cards and timeline cards)
 	 */
 	private async applyColorToSelection(color: 'red' | 'blue' | 'green' | 'yellow' | null): Promise<void> {
 		const selectedItems = Array.from(this.selectedIndices)
@@ -1324,21 +1333,33 @@ Created from timeline view.
 		let failCount = 0;
 		
 		for (const item of selectedItems) {
-			try {
-				await this.app.fileManager.processFrontMatter(item.file, (frontmatter) => {
-					if (color) {
-						frontmatter['color'] = color;
-					} else {
-						delete frontmatter['color'];
-					}
-				});
-				successCount++;
-				
-				// Update the local item for immediate UI feedback
-				item.color = color ?? undefined;
-			} catch (error) {
-				console.error(`Error applying color to "${item.file.basename}":`, error);
-				failCount++;
+			if (this.isNoteItem(item)) {
+				// Apply to note cards via frontmatter
+				try {
+					await this.app.fileManager.processFrontMatter(item.file, (frontmatter) => {
+						if (color) {
+							frontmatter['color'] = color;
+						} else {
+							delete frontmatter['color'];
+						}
+					});
+					successCount++;
+					
+					// Update the local item for immediate UI feedback
+					item.color = color ?? undefined;
+				} catch (error) {
+					console.error(`Error applying color to "${item.file.basename}":`, error);
+					failCount++;
+				}
+			} else if (this.isTimelineItem(item)) {
+				// Apply to timeline cards via cache
+				if (this.cacheService) {
+					this.cacheService.setTimelineCardColor(this.timelineId, item.timelineId, color);
+					item.color = color ?? undefined;
+					successCount++;
+				} else {
+					failCount++;
+				}
 			}
 		}
 		
@@ -1365,9 +1386,19 @@ Created from timeline view.
 	}
 
 	goToItem(item: TimelineItem): void {
-		const index = this.timelineItems.findIndex(i => i.file.path === item.file.path);
+		let index: number;
+		
+		if (this.isNoteItem(item)) {
+			index = this.timelineItems.findIndex(i => this.isNoteItem(i) && i.file.path === item.file.path);
+		} else if (this.isTimelineItem(item)) {
+			index = this.timelineItems.findIndex(i => this.isTimelineItem(i) && i.timelineId === item.timelineId);
+		} else {
+			console.error('Timeline: Unknown item type');
+			return;
+		}
+		
 		if (index === -1) {
-			console.error('Timeline: Item not found in timeline', item.file.path);
+			console.error('Timeline: Item not found in timeline');
 			return;
 		}
 
@@ -1379,7 +1410,8 @@ Created from timeline view.
 	}
 
 	fitToCardByPath(filePath: string): void {
-		const index = this.timelineItems.findIndex(i => i.file.path === filePath);
+		// Only note cards have file paths
+		const index = this.timelineItems.findIndex(i => this.isNoteItem(i) && i.file.path === filePath);
 		if (index === -1) {
 			return;
 		}
@@ -1623,7 +1655,10 @@ Created from timeline view.
 				timestamp: Date.now()
 			});
 			
-			const itemIndex = this.timelineItems.findIndex(item => item.file.path === entry.file.path);
+			// Only look for note items (timeline cards don't have files)
+			const itemIndex = this.timelineItems.findIndex(item => 
+				this.isNoteItem(item) && item.file.path === entry.file.path
+			);
 			if (itemIndex !== -1) {
 				const item = this.timelineItems[itemIndex]!;
 				
@@ -1649,6 +1684,9 @@ Created from timeline view.
 					this.component.refreshItems(this.timelineItems);
 				}
 			}
+			
+			// After undo, check if timeline cards need updating
+			this.scheduleTimelineCardRefresh();
 			
 			return true;
 		} catch (error) {
@@ -1689,7 +1727,10 @@ Created from timeline view.
 				timestamp: Date.now()
 			});
 			
-			const itemIndex = this.timelineItems.findIndex(item => item.file.path === entry.file.path);
+			// Only look for note items (timeline cards don't have files)
+			const itemIndex = this.timelineItems.findIndex(item => 
+				this.isNoteItem(item) && item.file.path === entry.file.path
+			);
 			if (itemIndex !== -1) {
 				const item = this.timelineItems[itemIndex]!;
 				
@@ -1715,6 +1756,9 @@ Created from timeline view.
 					this.component.refreshItems(this.timelineItems);
 				}
 			}
+			
+			// After undo, check if timeline cards need updating
+			this.scheduleTimelineCardRefresh();
 			
 			return true;
 		} catch (error) {
@@ -1744,20 +1788,23 @@ Created from timeline view.
 				}
 				
 				const itemIndex = this.timelineItems.findIndex(item => 
-					item.file.path === file.path || item.file.path === oldPath
+					this.isNoteItem(item) && (item.file.path === file.path || item.file.path === oldPath)
 				);
 				
 				if (itemIndex !== -1) {
-					console.log(`Timeline: File renamed from ${this.timelineItems[itemIndex]!.file.basename} to ${file.basename}`);
-					
-					this.timelineItems[itemIndex] = {
-						...this.timelineItems[itemIndex]!,
-						file: file,
-						title: file.basename
-					};
-					
-					if (this.component && this.component.refreshItems) {
-						this.component.refreshItems(this.timelineItems);
+					const item = this.timelineItems[itemIndex]!;
+					if (this.isNoteItem(item)) {
+						console.log(`Timeline: File renamed from ${item.file.basename} to ${file.basename}`);
+						
+						this.timelineItems[itemIndex] = {
+							...item,
+							file: file,
+							title: file.basename
+						};
+						
+						if (this.component && this.component.refreshItems) {
+							this.component.refreshItems(this.timelineItems);
+						}
 					}
 				}
 			})
@@ -1768,7 +1815,7 @@ Created from timeline view.
 			this.app.metadataCache.on('changed', (file) => {
 				if (!(file instanceof TFile)) return;
 				
-				const isInTimeline = this.timelineItems.some(item => item.file.path === file.path);
+				const isInTimeline = this.timelineItems.some(item => this.isNoteItem(item) && item.file.path === file.path);
 				const metadata = this.app.metadataCache.getFileCache(file);
 				const hasTimelineFlag = metadata?.frontmatter?.timeline === true;
 				
@@ -1802,6 +1849,10 @@ Created from timeline view.
 					if (this.component && this.component.refreshItems) {
 						this.component.refreshItems(this.timelineItems);
 					}
+					
+					// After the main refresh, async check if timeline cards need updating
+					// This handles cases where a referenced timeline's span changed
+					this.scheduleTimelineCardRefresh();
 				}, 300);
 			})
 		);

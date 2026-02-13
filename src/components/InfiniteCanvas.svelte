@@ -104,6 +104,14 @@
 		return Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
 	}
 
+	/**
+	 * Check if dimensions are valid (non-zero)
+	 * Used to guard against operations that need real viewport dimensions
+	 */
+	function hasValidDimensions(rect: { width: number; height: number }): boolean {
+		return rect.width > 0 && rect.height > 0;
+	}
+
 	// Calculate cursor screen X position for the dashed line
 	// X-axis: screenX = worldX + translateX (no scale)
 	// Since mouseX is already in screen space, just return it
@@ -123,6 +131,14 @@
 	// Viewport dimensions
 	let viewportWidth = $state(0);
 	let viewportHeight = $state(0);
+	
+	// Track previous dimensions to detect resize and maintain world center
+	let previousViewportWidth = $state(0);
+	let previousViewportHeight = $state(0);
+	
+	// Track whether we had valid dimensions in the last resize check
+	// This is used to detect when dimensions transition from zero to valid
+	let hadValidDimensions = $state(false);
 
 	// Mouse tracking for timeline hover
 	let mouseX = $state<number | null>(null);
@@ -147,6 +163,14 @@
 	// Debounce timer for viewport change notifications
 	let viewportChangeTimer: ReturnType<typeof setTimeout> | null = null;
 
+	// Track if viewport has been successfully restored (not just initialized)
+	// This is only true after setViewport() or centerView() has actually run with valid dimensions
+	let viewportRestored = $state(false);
+
+	// Store pending viewport when setViewport() is called with zero dimensions
+	// Will be applied when dimensions become valid
+	let pendingViewport: { centerX: number; centerDay?: number; centerY: number; timeScale: number; scale?: number } | null = null;
+
 	let viewportRef: HTMLDivElement;
 
 	interface Props {
@@ -159,7 +183,7 @@
 		isAnyCardDragging?: boolean;
 		isAnyCardResizing?: boolean;
 		activeResizeEdge?: 'left' | 'right' | null;
-		initialViewport?: { centerX: number; centerY: number; timeScale: number } | null;
+		initialViewport?: { centerX: number; centerDay?: number; centerY: number; timeScale: number } | null;
 		onViewportChanged?: () => void;
 		timelineName?: string;
 	}
@@ -179,7 +203,10 @@
 
 	// Notify parent of scale changes (for backward compatibility)
 	$effect(() => {
-		if (onScaleChange) {
+		// Only notify after viewport is fully restored to avoid spurious saves
+		// This prevents saveViewport from being called with wrong/default values
+		// before setViewport() or centerView() has properly positioned the camera
+		if (onScaleChange && viewportRestored) {
 			onScaleChange(scale, translateX, translateY);
 		}
 	});
@@ -193,7 +220,10 @@
 	
 	// Notify parent of time scale changes (for backward compatibility)
 	$effect(() => {
-		if (onTimeScaleChange) {
+		// Only notify after viewport is fully restored to avoid spurious saves
+		// This prevents saveViewport from being called with wrong/default values
+		// before setViewport() or centerView() has properly positioned the camera
+		if (onTimeScaleChange && viewportRestored) {
 			onTimeScaleChange(timeScale);
 		}
 	});
@@ -236,9 +266,7 @@
 		if (viewportChangeTimer) {
 			clearTimeout(viewportChangeTimer);
 		}
-		console.log(`InfiniteCanvas: Viewport change scheduled from: ${source}`);
 		viewportChangeTimer = setTimeout(() => {
-			console.log(`InfiniteCanvas: Viewport change firing (source: ${source})`);
 			onViewportChanged?.();
 		}, 300);
 	}
@@ -536,9 +564,11 @@
 
 	function centerView() {
 		const rect = viewportRef?.getBoundingClientRect();
-		if (rect) {
+		if (rect && rect.width > 0 && rect.height > 0) {
 			translateX = rect.width / 2;
 			translateY = rect.height / 2;
+			// Mark as restored since we successfully positioned the view
+			viewportRestored = true;
 		}
 	}
 
@@ -631,25 +661,87 @@
 		translateX = clampTranslateX(translateX);
 	}
 
-	// Update viewport dimensions
+	// Update viewport dimensions and maintain world center on resize
 	function updateViewportDimensions() {
-		if (viewportRef) {
-			const rect = viewportRef.getBoundingClientRect();
-			viewportWidth = rect.width;
-			viewportHeight = rect.height;
+		if (!viewportRef) return;
+		
+		const rect = viewportRef.getBoundingClientRect();
+		const newWidth = rect.width;
+		const newHeight = rect.height;
+		
+		// Check if dimensions transitioned from zero/invalid to valid
+		// This happens when sidebar expands or container becomes visible
+		const hasValidNewDimensions = newWidth > 0 && newHeight > 0;
+		const dimensionsBecameValid = !hadValidDimensions && hasValidNewDimensions;
+		
+		// If dimensions just became valid and we have a pending viewport, apply it now
+		if (dimensionsBecameValid && pendingViewport) {
+			viewportWidth = newWidth;
+			viewportHeight = newHeight;
+			setViewport(pendingViewport);
+			pendingViewport = null;
+			hadValidDimensions = true;
+			previousViewportWidth = newWidth;
+			previousViewportHeight = newHeight;
+			return;
 		}
+		
+		// Only maintain world center if viewport has been successfully restored AND dimensions are valid
+		// This prevents the resize logic from running with zero dimensions, which would corrupt
+		// translateX and translateY values (translateX = width/2 - worldX becomes -worldX when width=0)
+		if (viewportRestored && 
+		    previousViewportWidth > 0 && previousViewportHeight > 0 && 
+		    newWidth > 0 && newHeight > 0 &&
+		    (newWidth !== previousViewportWidth || newHeight !== previousViewportHeight)) {
+			
+			// Calculate current world center before resize
+			const centerTime = TimeScaleManager.screenXToDay(previousViewportWidth / 2, timeScale, translateX);
+			const centerWorldX = TimeScaleManager.dayToWorldX(centerTime, timeScale);
+			const centerScreenY = previousViewportHeight / 2;
+			const centerWorldY = (centerScreenY - translateY) / scale;
+			
+			// Update dimensions
+			viewportWidth = newWidth;
+			viewportHeight = newHeight;
+			
+			// Recalculate translateX to keep same world center
+			translateX = TimeScaleManager.calculateTranslateXToCenterWorldX(centerWorldX, newWidth);
+			translateX = clampTranslateX(translateX);
+			
+			// Recalculate translateY to keep same world center
+			translateY = TimeScaleManager.calculateTranslateYToCenterWorldY(centerWorldY, scale, newHeight);
+		} else if (newWidth > 0 && newHeight > 0) {
+			// Dimensions are valid but we don't need to maintain center (first initialization or no change)
+			viewportWidth = newWidth;
+			viewportHeight = newHeight;
+		} else {
+			// Dimensions are zero (pane collapsed/hidden) - update state but DON'T recalculate transforms
+			// Keep previousViewportWidth/Height so we know the last valid dimensions when pane reopens
+			viewportWidth = newWidth;
+			viewportHeight = newHeight;
+			// Mark that we no longer have valid dimensions
+			hadValidDimensions = false;
+			// DON'T update previousViewportWidth/Height - keep the last valid dimensions
+			// This allows proper restoration when pane reopens
+			return;
+		}
+		
+		// Store current dimensions for next resize (only if dimensions are valid)
+		previousViewportWidth = newWidth;
+		previousViewportHeight = newHeight;
+		// Mark that we have valid dimensions
+		hadValidDimensions = true;
 	}
 
 	// Get current viewport state for persistence
-	export function getViewport(): { centerX: number; centerY: number; timeScale: number; scale: number } | null {
+	export function getViewport(): { centerX: number; centerDay: number; centerY: number; timeScale: number; scale: number } | null {
 		const rect = viewportRef?.getBoundingClientRect();
-		if (!rect) return null;
+		if (!rect || !hasValidDimensions(rect)) return null;
 		
 		const centerTime = getCenterTime();
 		if (centerTime === null) return null;
 		
-		// Get the time at the left edge to calculate centerX in world coordinates
-		const leftEdgeTime = TimeScaleManager.screenXToDay(0, timeScale, translateX);
+		// Calculate centerX (worldX coordinate - legacy, for backward compatibility)
 		const centerWorldX = TimeScaleManager.dayToWorldX(centerTime, timeScale);
 		
 		// Y center is middle of viewport
@@ -657,7 +749,8 @@
 		const centerWorldY = (centerScreenY - translateY) / scale;
 		
 		return {
-			centerX: centerWorldX,
+			centerX: centerWorldX,  // Legacy: worldX coordinate
+			centerDay: centerTime,   // Preferred: days from epoch (time-scale independent)
 			centerY: centerWorldY,
 			timeScale: timeScale,
 			scale: scale // Include Y-axis zoom level
@@ -665,24 +758,60 @@
 	}
 
 	// Set viewport state from persistence
-	export function setViewport(viewport: { centerX: number; centerY: number; timeScale: number; scale?: number }) {
+	export function setViewport(viewport: { centerX: number; centerDay?: number; centerY: number; timeScale: number; scale?: number }) {
 		const rect = viewportRef?.getBoundingClientRect();
 		if (!rect) return;
 		
+		// Guard: if dimensions are zero, defer restoration until container has real dimensions
+		// With rect.width = 0, translateX = 0 - centerWorldX = -centerWorldX
+		// This would place the center at screen position 0 (left edge) instead of center
+		if (!hasValidDimensions(rect)) {
+			pendingViewport = viewport;
+			return;
+		}
+		
+		// Clear any pending viewport - we're applying this one now
+		pendingViewport = null;
+		
 		// Clamp timeScale to ensure we don't zoom out beyond the 20B year limit
-		timeScale = clampTimeScale(viewport.timeScale);
+		// Use a local clamp function that uses current rect dimensions to avoid race condition with state
+		const getLocalMinTimeScale = () => rect.width / (2 * MAX_DAYS_FROM_EPOCH);
+		const localClampTimeScale = (ts: number) => Math.max(getLocalMinTimeScale(), ts);
+		timeScale = localClampTimeScale(viewport.timeScale);
 		
 		// Restore Y-axis zoom level (default to 1 if not present in old caches)
 		scale = clampScale(viewport.scale ?? 1);
 		
-		// Calculate translateX to center on centerX
-		translateX = TimeScaleManager.calculateTranslateXToCenterWorldX(viewport.centerX, rect.width);
+		// Calculate center world X coordinate
+		// Prefer centerDay (time-scale independent), fall back to centerX (legacy)
+		let centerWorldX: number;
+		if (viewport.centerDay !== undefined) {
+			centerWorldX = TimeScaleManager.dayToWorldX(viewport.centerDay, timeScale);
+		} else {
+			// Legacy: centerX was stored as worldX at the SAVED timeScale
+			// We need to convert it back to days, then to the NEW worldX
+			const savedTimeScale = viewport.timeScale;
+			const centerDay = TimeScaleManager.worldXToDay(viewport.centerX, savedTimeScale);
+			centerWorldX = TimeScaleManager.dayToWorldX(centerDay, timeScale);
+		}
 		
-		// Clamp translation to keep viewport within bounds
-		translateX = clampTranslateX(translateX);
+		// Calculate translateX to center on the world coordinate
+		translateX = TimeScaleManager.calculateTranslateXToCenterWorldX(centerWorldX, rect.width);
+		
+		// Clamp translation using local function that uses rect.width directly (not state)
+		// This avoids race conditions where viewportWidth state hasn't been flushed yet
+		const localClampTranslateX = (newTranslateX: number): number => {
+			const maxTranslateX = MAX_DAYS_FROM_EPOCH * timeScale;
+			const minTranslateX = rect.width - MAX_DAYS_FROM_EPOCH * timeScale;
+			return Math.max(minTranslateX, Math.min(maxTranslateX, newTranslateX));
+		};
+		translateX = localClampTranslateX(translateX);
 		
 		// Calculate translateY to center on centerY
 		translateY = TimeScaleManager.calculateTranslateYToCenterWorldY(viewport.centerY, scale, rect.height);
+		
+		// Mark viewport as successfully restored
+		viewportRestored = true;
 	}
 
 	// Center the view initially
@@ -693,14 +822,14 @@
 			
 			// Load initial viewport if provided, otherwise center
 			if (initialViewport) {
-				console.log('InfiniteCanvas: Loading initial viewport:', initialViewport);
 				// Small delay to ensure container has proper dimensions
 				setTimeout(() => {
 					setViewport(initialViewport);
+					// Note: viewportRestored is set inside setViewport if dimensions are valid
 				}, 0);
 			} else {
-				console.log('InfiniteCanvas: No initial viewport, centering view');
 				centerView();
+				// centerView always has valid dimensions (it's a default positioning)
 			}
 		});
 		

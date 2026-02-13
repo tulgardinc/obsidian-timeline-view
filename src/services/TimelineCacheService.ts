@@ -3,9 +3,11 @@ import { LayerManager, type LayerableItem, type LayerAssignment } from '../utils
 
 /**
  * Viewport state for a timeline (camera position and zoom)
+ * centerDay is preferred (time-scale independent), centerX is kept for backward compatibility
  */
 export interface ViewportState {
-	centerX: number;
+	centerX: number;  // Legacy: worldX coordinate (deprecated, use centerDay instead)
+	centerDay: number; // Preferred: days from epoch at viewport center (time-scale independent)
 	centerY: number;
 	timeScale: number;
 	scale?: number; // Y-axis zoom level (0.5 to 2.0), defaults to 1 if not present
@@ -21,11 +23,20 @@ export interface TimelineNoteData {
 }
 
 /**
+ * Timeline card data - references another timeline
+ */
+export interface TimelineCardData {
+	layer: number;
+	color?: 'red' | 'blue' | 'green' | 'yellow';
+}
+
+/**
  * Data for a single timeline
  */
 export interface TimelineData {
 	viewport: ViewportState;
 	notes: Record<string, TimelineNoteData>; // Key is note ID
+	timelineCards?: Record<string, TimelineCardData>; // Key is referenced timeline ID
 }
 
 /**
@@ -171,6 +182,7 @@ export class TimelineCacheService {
 			this.cache.timelines[timelineId] = {
 				viewport: {
 					centerX: 0,
+					centerDay: 0,
 					centerY: 0,
 					timeScale: 10, // Default time scale
 					scale: 1 // Default Y-axis zoom (100%)
@@ -281,6 +293,63 @@ export class TimelineCacheService {
 		const data = this.cache.timelines[timelineId];
 		if (data && data.notes[noteId]) {
 			delete data.notes[noteId];
+			this.scheduleSave();
+		}
+	}
+
+	/**
+	 * Get timeline cards for a specific timeline
+	 */
+	getTimelineCards(timelineId: string): Record<string, TimelineCardData> | undefined {
+		const data = this.cache.timelines[timelineId];
+		return data?.timelineCards;
+	}
+
+	/**
+	 * Add a timeline card to a timeline
+	 */
+	addTimelineCard(timelineId: string, referencedTimelineId: string, layer: number): void {
+		const data = this.getOrCreateTimelineData(timelineId);
+		if (!data.timelineCards) {
+			data.timelineCards = {};
+		}
+		data.timelineCards[referencedTimelineId] = { layer };
+		this.scheduleSave();
+	}
+
+	/**
+	 * Set color for a timeline card
+	 */
+	setTimelineCardColor(timelineId: string, referencedTimelineId: string, color: 'red' | 'blue' | 'green' | 'yellow' | null): void {
+		const data = this.cache.timelines[timelineId];
+		if (data?.timelineCards?.[referencedTimelineId]) {
+			if (color) {
+				data.timelineCards[referencedTimelineId].color = color;
+			} else {
+				delete data.timelineCards[referencedTimelineId].color;
+			}
+			this.scheduleSave();
+		}
+	}
+
+	/**
+	 * Remove a timeline card from a timeline
+	 */
+	removeTimelineCard(timelineId: string, referencedTimelineId: string): void {
+		const data = this.cache.timelines[timelineId];
+		if (data?.timelineCards?.[referencedTimelineId]) {
+			delete data.timelineCards[referencedTimelineId];
+			this.scheduleSave();
+		}
+	}
+
+	/**
+	 * Set layer for a timeline card
+	 */
+	setTimelineCardLayer(timelineId: string, referencedTimelineId: string, layer: number): void {
+		const data = this.cache.timelines[timelineId];
+		if (data?.timelineCards?.[referencedTimelineId]) {
+			data.timelineCards[referencedTimelineId].layer = layer;
 			this.scheduleSave();
 		}
 	}

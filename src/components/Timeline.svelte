@@ -31,7 +31,7 @@
 		// Callback for context menu - parent uses Obsidian Menu API
 		onItemContextMenu?: (index: number, event: MouseEvent) => void;
 		// Viewport persistence
-		initialViewport?: { centerX: number; centerY: number; timeScale: number; scale?: number } | null;
+		initialViewport?: { centerX: number; centerDay?: number; centerY: number; timeScale: number; scale?: number } | null;
 		onViewportChange?: () => void;
 	}
 
@@ -317,9 +317,10 @@
 			onViewportChanged={onViewportChange}
 			timelineName={timelineName}
 		>
-		{#each items as item, index (item.file.path)}
+		{#each items as item, index (`${item.type}-${item.type === 'note' ? item.file.path : item.timelineId}`)}
 			{@const isCardSelected = selectedIndices.has(index)}
 			<TimelineCard 
+				type={item.type}
 				x={item.x} 
 				y={item.y} 
 				width={item.width}

@@ -73,8 +73,9 @@ export class EventHandlerService {
 			if (!(file instanceof TFile)) return;
 
 			const items = this.getTimelineItems();
+			// Only check note items (timeline cards don't have files)
 			const itemIndex = items.findIndex(item =>
-				item.file.path === file.path || item.file.path === oldPath
+				item.type === 'note' && (item.file.path === file.path || item.file.path === oldPath)
 			);
 
 			if (itemIndex !== -1) {
@@ -94,7 +95,8 @@ export class EventHandlerService {
 			if (!(file instanceof TFile)) return;
 
 			const items = this.getTimelineItems();
-			const isInTimeline = items.some(item => item.file.path === file.path);
+			// Only check note items (timeline cards don't have files)
+			const isInTimeline = items.some(item => item.type === 'note' && item.file.path === file.path);
 			const metadata = this.app.metadataCache.getFileCache(file);
 			const hasTimelineFlag = metadata?.frontmatter?.timeline === true;
 

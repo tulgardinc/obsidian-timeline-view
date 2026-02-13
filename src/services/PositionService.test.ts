@@ -78,6 +78,7 @@ describe('PositionService', () => {
 
       const items = [
         {
+          type: 'note' as const,
           file: { path: 'test.md' } as any,
           title: 'Test',
           x: 0,
@@ -102,6 +103,7 @@ describe('PositionService', () => {
 
       const items = [
         {
+          type: 'note' as const,
           file: { path: 'test.md' } as any,
           title: 'Test',
           x: 0,
@@ -123,6 +125,7 @@ describe('PositionService', () => {
 
       const items = [
         {
+          type: 'note' as const,
           file: { path: 'test.md' } as any,
           title: 'Test',
           x: 50,

@@ -6,6 +6,7 @@
 	import type { ViewportState } from "../utils/CameraSystem";
 
 	interface Props {
+		type: 'note' | 'timeline';
 		x: number;
 		y: number;
 		width: number;
@@ -26,7 +27,11 @@
 		onContextMenu?: (event: MouseEvent) => void;
 	}
 
-	let { x, y, width, title, layer, color, isSelected = false, onResize, onMove, onLayerChange, onClick, onSelect, onUpdateSelection, onDragStart, onDragEnd, onResizeStart, onResizeEnd, onContextMenu }: Props = $props();
+	let { type, x, y, width, title, layer, color, isSelected = false, onResize, onMove, onLayerChange, onClick, onSelect, onUpdateSelection, onDragStart, onDragEnd, onResizeStart, onResizeEnd, onContextMenu }: Props = $props();
+	
+	// Derived: is this a timeline card?
+	const isTimelineCard = $derived(type === 'timeline');
+	const isNoteCard = $derived(type === 'note');
 
 	const GRID_SPACING = 50;
 	const START_DATE = new Date('1970-01-01');
@@ -243,10 +248,17 @@
 			
 			// Calculate new X position
 			let newX = dragStartX + worldDeltaX;
-			// Snap to nearest marker position (like resizing does)
-			const targetDay = TimeScaleManager.worldXToDay(newX, timeScale);
-			const snappedDay = TimeScaleManager.snapToNearestMarker(Math.round(targetDay), scaleLevel());
-			newX = TimeScaleManager.dayToWorldX(snappedDay, timeScale);
+			
+			// For note cards: snap to nearest marker position (like resizing does)
+			// For timeline cards: don't change X position - they're locked in time
+			if (isNoteCard) {
+				const targetDay = TimeScaleManager.worldXToDay(newX, timeScale);
+				const snappedDay = TimeScaleManager.snapToNearestMarker(Math.round(targetDay), scaleLevel());
+				newX = TimeScaleManager.dayToWorldX(snappedDay, timeScale);
+			} else {
+				// Timeline cards: keep original X position
+				newX = dragStartX;
+			}
 			
 			// Calculate new Y position and target layer
 			let newY = dragStartY + worldDeltaY;
@@ -324,10 +336,8 @@
 	}
 
 	function handleMouseUp() {
-		// Check if this was a click (mouse down but never started moving)
-		if (isMouseDown && !isMoving && !dragThresholdMet && onClick && lastClickEvent) {
-			onClick(lastClickEvent);
-		}
+		// Note: onClick is now called in handleClick to ensure proper event handling
+		// We don't call it here to avoid double-firing
 		
 		if (isResizing && onResize && resizeEdge) {
 			// Signal resize is finished - calculate final delta
@@ -372,6 +382,13 @@
 	function handleCardMouseMove(event: MouseEvent) {
 		if (isResizing || isMoving) return;
 		
+		// Timeline cards cannot be resized - skip edge detection
+		if (isTimelineCard) {
+			resizeEdge = null;
+			canMove = true;
+			return;
+		}
+		
 		// Check if mouse is in edge zones
 		const rect = cardRef?.getBoundingClientRect();
 		if (!rect) return;
@@ -402,6 +419,12 @@
 	function handleClick(event: MouseEvent) {
 		// Stop click from bubbling to canvas (prevents deselection)
 		event.stopPropagation();
+		
+		// Only call onClick if this wasn't a drag/resize operation
+		// (handleMouseUp already calls onClick if there was no drag)
+		if (!isMoving && !isResizing && !dragThresholdMet) {
+			onClick?.(event);
+		}
 	}
 
 	function handleContextMenu(event: MouseEvent) {
@@ -432,6 +455,8 @@
 {#if !isCompletelyOutside() && visualWidth() >= 15}
 	<div
 		class="timeline-card"
+		class:is-timeline-card={isTimelineCard}
+		class:is-note-card={isNoteCard}
 		class:color-red={color === 'red'}
 		class:color-blue={color === 'blue'}
 		class:color-green={color === 'green'}
@@ -456,16 +481,18 @@
 		tabindex="0"
 		aria-label="Timeline card: {title}"
 	>
-		<!-- Colored line at top -->
-		<div class="color-line" aria-hidden="true"></div>
+		<!-- Colored line at top - only for note cards -->
+		{#if isNoteCard}
+			<div class="color-line" aria-hidden="true"></div>
+		{/if}
 		
-		<!-- Left resize handle - only show if not clamped -->
-		{#if !isClampedLeft()}
+		<!-- Left resize handle - only show if not clamped AND not a timeline card -->
+		{#if isNoteCard && !isClampedLeft()}
 			<div class="resize-handle resize-handle-left" aria-hidden="true"></div>
 		{/if}
 		
-		<!-- Right resize handle - only show if not clamped -->
-		{#if !isClampedRight()}
+		<!-- Right resize handle - only show if not clamped AND not a timeline card -->
+		{#if isNoteCard && !isClampedRight()}
 			<div class="resize-handle resize-handle-right" aria-hidden="true"></div>
 		{/if}
 		
@@ -539,6 +566,41 @@
 
 	.timeline-card.color-yellow .color-line {
 		background: var(--color-yellow);
+	}
+
+	/* Timeline card specific styling */
+	.timeline-card.is-timeline-card {
+		background: var(--background-modifier-accent);
+		border: 3px solid var(--interactive-accent);
+		border-style: dashed;
+		cursor: grab;
+	}
+
+	.timeline-card.is-timeline-card:hover {
+		background: var(--background-modifier-active-hover);
+		box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+	}
+
+	.timeline-card.is-timeline-card.selected {
+		border-color: var(--interactive-accent-hover);
+		background: var(--background-modifier-active);
+	}
+
+	/* Timeline card color backgrounds (dimmed versions) */
+	.timeline-card.is-timeline-card.color-red {
+		background: color-mix(in srgb, var(--color-red) 20%, var(--background-secondary) 80%);
+	}
+
+	.timeline-card.is-timeline-card.color-blue {
+		background: color-mix(in srgb, var(--color-blue) 20%, var(--background-secondary) 80%);
+	}
+
+	.timeline-card.is-timeline-card.color-green {
+		background: color-mix(in srgb, var(--color-green) 20%, var(--background-secondary) 80%);
+	}
+
+	.timeline-card.is-timeline-card.color-yellow {
+		background: color-mix(in srgb, var(--color-yellow) 20%, var(--background-secondary) 80%);
 	}
 
 	.timeline-card:hover {

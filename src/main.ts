@@ -119,6 +119,32 @@ export default class MyPlugin extends Plugin {
 			}
 		});
 
+		// Add command to add a timeline card to the current timeline
+		this.addCommand({
+			id: 'add-timeline-card',
+			name: 'Add Timeline',
+			callback: () => {
+				const view = this.app.workspace.getActiveViewOfType(TimelineView);
+				if (!view) {
+					new Notice('No active timeline view');
+					return;
+				}
+				
+				// Show timeline selector to pick which timeline to add
+				const timelines = this.settings.timelineViews;
+				if (timelines.length === 0) {
+					new Notice('No timelines configured');
+					return;
+				}
+				
+				new TimelineSelectorModal(
+					this.app,
+					timelines,
+					(timeline) => view.addTimelineCard(timeline.id, timeline.name)
+				).open();
+			}
+		});
+
 		this.addSettingTab(new TimelineSettingTab(this.app, this));
 
 		// Listen for view state restoration to configure timeline views
@@ -229,10 +255,22 @@ export default class MyPlugin extends Plugin {
 		// Check if a view with this timeline ID is already open
 		const leaves = workspace.getLeavesOfType(VIEW_TYPE_TIMELINE);
 		for (const leaf of leaves) {
-			const view = leaf.view as TimelineView;
-			if (view && view.getTimelineId() === config.id) {
-				// View already exists, reveal it
+			const view = leaf.view;
+			// First check: fully initialized TimelineView with matching ID
+			if (view instanceof TimelineView && typeof view.getTimelineId === 'function' && view.getTimelineId() === config.id) {
 				workspace.revealLeaf(leaf);
+				return;
+			}
+			// Second check: deferred/restored view via its persisted state
+			// This handles workspace restoration where view may not be fully instantiated yet
+			const viewState = leaf.getViewState();
+			if (viewState?.type === VIEW_TYPE_TIMELINE && viewState.state?.timelineId === config.id) {
+				workspace.revealLeaf(leaf);
+				// If the view is now ready, ensure it's configured
+				const revealedView = leaf.view;
+				if (revealedView instanceof TimelineView) {
+					revealedView.setTimelineConfig(config);
+				}
 				return;
 			}
 		}
@@ -253,16 +291,18 @@ export default class MyPlugin extends Plugin {
 			}
 		});
 
-		// Configure the view with the timeline config
+		// Reveal the leaf FIRST - ensures the sidebar is expanded and has proper dimensions
+		// This must happen BEFORE setTimelineConfig to avoid viewport restoration with zero dimensions
+		workspace.revealLeaf(leaf);
+
+		// Wait for layout to settle and dimensions to be computed
+		await new Promise(resolve => requestAnimationFrame(resolve));
+
+		// Configure the view with the timeline config AFTER leaf is visible
 		const view = leaf.view as TimelineView;
 		if (view) {
 			view.setTimelineConfig(config);
 		}
-
-		// Reveal the leaf
-		workspace.revealLeaf(leaf);
-
-		console.log(`Opened Timeline view: ${config.name}`);
 	}
 
 	/**

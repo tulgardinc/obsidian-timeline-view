@@ -2,8 +2,7 @@ import { writable, derived, type Readable } from 'svelte/store';
 import type { TFile } from 'obsidian';
 import type { TimelineColor } from '../utils/LayerManager';
 
-export interface TimelineItem {
-	file: TFile;
+export interface TimelineItemBase {
 	title: string;
 	x: number;
 	y: number;
@@ -13,6 +12,19 @@ export interface TimelineItem {
 	layer?: number;
 	color?: TimelineColor;
 }
+
+export interface NoteTimelineItem extends TimelineItemBase {
+	type: 'note';
+	file: TFile;
+}
+
+export interface TimelineRefItem extends TimelineItemBase {
+	type: 'timeline';
+	timelineId: string;
+	timelineName: string;
+}
+
+export type TimelineItem = NoteTimelineItem | TimelineRefItem;
 
 export interface CardSelection {
 	index: number | null;
@@ -54,7 +66,7 @@ function createTimelineStore() {
 				const newItems = [...state.items];
 				const currentItem = newItems[index];
 				if (!currentItem) return state;
-				newItems[index] = { ...currentItem, ...updates };
+				newItems[index] = { ...currentItem, ...updates } as TimelineItem;
 				return { ...state, items: newItems };
 			});
 		},
