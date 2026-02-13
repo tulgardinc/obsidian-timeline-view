@@ -6,12 +6,14 @@ export class DeleteConfirmModal extends Modal {
 	private file: TFile;
 	private onAction: (action: DeleteAction) => void;
 	private customTitle?: string;
+	private itemCount?: number;
 
-	constructor(app: App, file: TFile, onAction: (action: DeleteAction) => void, customTitle?: string) {
+	constructor(app: App, file: TFile, onAction: (action: DeleteAction) => void, customTitle?: string, itemCount?: number) {
 		super(app);
 		this.file = file;
 		this.onAction = onAction;
 		this.customTitle = customTitle;
+		this.itemCount = itemCount;
 	}
 
 	onOpen() {
@@ -21,13 +23,17 @@ export class DeleteConfirmModal extends Modal {
 		contentEl.addClass('delete-confirm-modal');
 
 		// Title
-		const title = this.customTitle ?? `Delete "${this.file.basename}"?`;
+		const count = this.itemCount ?? 1;
+		const title = this.customTitle ?? (count > 1 
+			? `Delete ${count} cards?`
+			: `Delete "${this.file.basename}"?`);
 		contentEl.createEl('h2', { text: title });
 
 		// Description
-		contentEl.createEl('p', { 
-			text: 'Choose what to do with this timeline card:' 
-		});
+		const descriptionText = count > 1
+			? `Choose what to do with these ${count} timeline cards:`
+			: 'Choose what to do with this timeline card:';
+		contentEl.createEl('p', { text: descriptionText });
 
 		// Button container
 		const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });

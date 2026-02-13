@@ -813,7 +813,15 @@ export class TimelineView extends ItemView {
 				.setTitle("Fit to View")
 				.setIcon("maximize")
 				.onClick(() => {
-					this.selectCard(index);
+					// If the clicked card is not in the current selection, select only that card
+					// Otherwise, keep the existing multi-selection
+					if (!this.selectedIndices.has(index)) {
+						this.selectCard(index);
+					} else {
+						// Just ensure this is the active item for context
+						this.activeIndex = index;
+						this.updateSelectedCardData(index);
+					}
 					if (this.component && 'fitCardWidth' in this.component) {
 						(this.component as { fitCardWidth: (x: number, width: number) => void }).fitCardWidth(item.x, item.width);
 					}
@@ -827,7 +835,15 @@ export class TimelineView extends ItemView {
 				.setTitle("Delete")
 				.setIcon("trash")
 				.onClick(() => {
-					this.selectCard(index);
+					// If the clicked card is not in the current selection, select only that card
+					// Otherwise, keep the existing multi-selection
+					if (!this.selectedIndices.has(index)) {
+						this.selectCard(index);
+					} else {
+						// Just ensure this is the active item for context
+						this.activeIndex = index;
+						this.updateSelectedCardData(index);
+					}
 					this.handleDeleteCard();
 				});
 		});
@@ -862,8 +878,7 @@ export class TimelineView extends ItemView {
 				}
 			}).open();
 		} else {
-			// Multi-delete confirmation
-			const fileNames = selectedItems.map(item => item.file.basename).join(', ');
+			// Multi-delete confirmation - just show count
 			new DeleteConfirmModal(this.app, selectedItems[0]!.file, async (action: DeleteAction) => {
 				switch (action) {
 					case 'remove-from-timeline':
@@ -876,7 +891,7 @@ export class TimelineView extends ItemView {
 					default:
 						break;
 				}
-			}, `Delete ${selectedItems.length} cards (${fileNames.substring(0, 50)}${fileNames.length > 50 ? '...' : ''})?`).open();
+			}, undefined, selectedItems.length).open();
 		}
 	}
 

@@ -97,6 +97,13 @@
 	let isAnyCardDragging = $state(false);
 	let isAnyCardResizing = $state(false);
 	let activeResizeEdge = $state<'left' | 'right' | null>(null);
+	let activeResizeIndex = $state<number | null>(null);
+	let activeMoveIndex = $state<number | null>(null);
+
+	// Store original positions at drag/resize start to prevent delta accumulation flicker
+	// Key: card index, Value: original x, y, width at start of operation
+	let resizeStartState = $state<Map<number, { x: number; y: number; width: number }>>(new Map());
+	let moveStartState = $state<Map<number, { x: number; y: number }>>(new Map());
 
 	// Reference to InfiniteCanvas for viewport control
 	let infiniteCanvasRef: InfiniteCanvas;
@@ -122,15 +129,24 @@
 		const item = items[index];
 		if (!item) return;
 		
-		// Calculate new position and size based on edge
-		let newX = item.x;
-		let newWidth = item.width;
+		// Get the original start state for this resize operation
+		const startState = resizeStartState.get(index);
+		if (!startState) {
+			// Fallback to current values if no start state (shouldn't happen)
+			console.warn('Timeline: Resize start state not found for index', index);
+			return;
+		}
+		
+		// Calculate new position and size based on original values + delta
+		// This prevents flicker by always computing from the original snapshot
+		let newX = startState.x;
+		let newWidth = startState.width;
 		
 		if (edge === 'left') {
-			newX = item.x + deltaX;
-			newWidth = item.width - deltaX;
+			newX = startState.x + deltaX;
+			newWidth = startState.width - deltaX;
 		} else {
-			newWidth = item.width + deltaX;
+			newWidth = startState.width + deltaX;
 		}
 		
 		// Update the item optimistically by creating new object for reactivity
@@ -143,17 +159,32 @@
 		// If finished, notify parent with the delta for multi-select support
 		if (finished) {
 			onItemResize(index, edge, deltaX);
+			// Clear the start state for this card
+			resizeStartState.delete(index);
+			activeResizeIndex = null;
 		}
 	}
 
-	function handleResizeStart(edge: 'left' | 'right') {
+	function handleResizeStart(index: number, edge: 'left' | 'right') {
 		isAnyCardResizing = true;
 		activeResizeEdge = edge;
+		activeResizeIndex = index;
+		
+		// Capture the original state at the start of resize
+		const item = items[index];
+		if (item) {
+			resizeStartState.set(index, {
+				x: item.x,
+				y: item.y,
+				width: item.width
+			});
+		}
 	}
 
 	function handleResizeEnd() {
 		isAnyCardResizing = false;
 		activeResizeEdge = null;
+		// Note: resizeStartState is cleared in handleResize when finished=true
 	}
 
 	function handleMove(index: number, deltaX: number, deltaY: number, finished: boolean) {
@@ -163,9 +194,18 @@
 		const item = items[index];
 		if (!item) return;
 		
-		// Calculate new position
-		const newX = item.x + deltaX;
-		const newY = item.y + deltaY;
+		// Get the original start state for this move operation
+		const startState = moveStartState.get(index);
+		if (!startState) {
+			// Fallback to current values if no start state (shouldn't happen)
+			console.warn('Timeline: Move start state not found for index', index);
+			return;
+		}
+		
+		// Calculate new position based on original values + delta
+		// This prevents flicker by always computing from the original snapshot
+		const newX = startState.x + deltaX;
+		const newY = startState.y + deltaY;
 		
 		// Update the item optimistically by creating new object for reactivity
 		items[index] = {
@@ -177,15 +217,29 @@
 		// If finished, notify parent with the delta for multi-select support
 		if (finished) {
 			onItemMove(index, deltaX, deltaY);
+			// Clear the start state for this card
+			moveStartState.delete(index);
+			activeMoveIndex = null;
 		}
 	}
 
-	function handleDragStart() {
+	function handleDragStart(index: number) {
 		isAnyCardDragging = true;
+		activeMoveIndex = index;
+		
+		// Capture the original state at the start of drag
+		const item = items[index];
+		if (item) {
+			moveStartState.set(index, {
+				x: item.x,
+				y: item.y
+			});
+		}
 	}
 
 	function handleDragEnd() {
 		isAnyCardDragging = false;
+		// Note: moveStartState is cleared in handleMove when finished=true
 	}
 
 	function handleLayerChange(index: number, newLayer: number, newX: number, newWidth: number, finished: boolean) {
@@ -242,9 +296,9 @@
 				onClick={(event) => onItemClick(index, event)}
 				onSelect={() => onItemSelect(index)}
 				onUpdateSelection={(startX, endX, startDate, endDate) => onUpdateSelectionData(startX, endX, startDate, endDate)}
-				onDragStart={handleDragStart}
+				onDragStart={() => handleDragStart(index)}
 				onDragEnd={handleDragEnd}
-				onResizeStart={handleResizeStart}
+				onResizeStart={(edge) => handleResizeStart(index, edge)}
 				onResizeEnd={handleResizeEnd}
 				onContextMenu={(event) => handleContextMenu(index, event)}
 			/>
