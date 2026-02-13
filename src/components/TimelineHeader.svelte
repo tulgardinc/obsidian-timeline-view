@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { TimeScaleManager, type ScaleLevel } from "../utils/TimeScaleManager";
+	import type { Readable } from "svelte/store";
 
 	interface CardHoverData {
 		startX: number;
@@ -19,6 +20,7 @@
 		isAnyCardResizing?: boolean;
 		activeResizeEdge?: 'left' | 'right' | null;
 		timelineName?: string;
+		cursorX?: Readable<number>;
 	}
 
 	let { 
@@ -30,7 +32,8 @@
 		selectedCard = null, 
 		isAnyCardResizing = false, 
 		activeResizeEdge = null,
-		timelineName = "Timeline"
+		timelineName = "Timeline",
+		cursorX
 	}: Props = $props();
 
 	// Calculate current scale level based on timeScale pixel density
@@ -95,18 +98,21 @@
 		<div class="timeline-line" style="width: {viewportWidth}px;"></div>
 	</div>
 	
-	<!-- Hover overlay (stays at mouse position) - hidden when resizing -->
-	{#if isHovering && mouseX !== null && !isAnyCardResizing}
-		{@const info = hoverInfo()}
-		{#if info}
-			<div
-				class="hover-indicator"
-				style="left: {info.screenX}px;"
-			>
-				<div class="date-label">{info.formatted}</div>
-				<div class="vertical-bar"></div>
-			</div>
-		{/if}
+	<!-- Hover overlay - uses exact same snapped position as cursor line -->
+	<!-- Hidden when resizing, follows cursorX tweened position from InfiniteCanvas -->
+	{#if cursorX && isHovering && !isAnyCardResizing}
+		{@const cursorPos = $cursorX as number}
+		{@const level = scaleLevel()}
+		{@const dayAtCursor = Math.round(TimeScaleManager.screenXToDay(cursorPos, timeScale, translateX))}
+		{@const snappedDay = TimeScaleManager.snapToNearestMarker(dayAtCursor, level)}
+		{@const formattedDate = TimeScaleManager.formatDateForLevel(snappedDay, level)}
+		<div
+			class="hover-indicator"
+			style="left: {cursorPos}px;"
+		>
+			<div class="date-label">{formattedDate}</div>
+			<div class="vertical-bar"></div>
+		</div>
 	{/if}
 	
 	<!-- Card boundary lines (when a card is selected) -->

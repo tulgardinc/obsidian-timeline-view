@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from "svelte";
+	import { tweened } from "svelte/motion";
+	import { cubicOut } from "svelte/easing";
 	import GridLines from "./GridLines.svelte";
 	import TimelineHeader from "./TimelineHeader.svelte";
 	import { setViewportContext } from "../contexts/ViewportContext";
@@ -110,12 +112,24 @@
 		return rect.width > 0 && rect.height > 0;
 	}
 
-	// Calculate cursor screen X position for the dashed line
+	// Animated cursor position with snapping to time units
 	// X-axis: screenX = worldX + translateX (no scale)
-	// Since mouseX is already in screen space, just return it
-	let cursorScreenX = $derived(() => {
-		if (mouseX === null || !isHovering) return null;
-		return mouseX;
+	const animatedCursorX = tweened(0, {
+		duration: 200,
+		easing: cubicOut
+	});
+
+	// Calculate snapped cursor position based on current zoom level
+	$effect(() => {
+		if (mouseX === null || !isHovering) return;
+		
+		// Convert screen X to day, snap to nearest marker, convert back to screen X
+		const dayAtMouse = TimeScaleManager.screenXToDay(mouseX, timeScale, translateX);
+		const scaleLevel = TimeScaleManager.getScaleLevel(timeScale);
+		const snappedDay = TimeScaleManager.snapToNearestMarker(Math.round(dayAtMouse), scaleLevel);
+		const snappedScreenX = TimeScaleManager.dayToScreen(snappedDay, timeScale, translateX);
+		
+		animatedCursorX.set(snappedScreenX);
 	});
 
 	// Transform state
@@ -904,18 +918,17 @@
 		isAnyCardResizing={isAnyCardResizing}
 		activeResizeEdge={activeResizeEdge}
 		timelineName={timelineName}
+		cursorX={animatedCursorX}
 	/>
 	
 	<!-- Dashed cursor line spanning full viewport height -->
 	<!-- Hide cursor line when dragging or resizing a card -->
-	{#if cursorScreenX() !== null && !isAnyCardDragging && !isAnyCardResizing}
-		{@const screenX = cursorScreenX()}
-		{#if screenX !== null}
-			<div
-				class="cursor-line"
-				style="left: {screenX}px;"
-			></div>
-		{/if}
+	<!-- Uses animatedCursorX with snapping to time units at current zoom level -->
+	{#if isHovering && !isAnyCardDragging && !isAnyCardResizing}
+		<div
+			class="cursor-line"
+			style="left: {$animatedCursorX}px;"
+		></div>
 	{/if}
 	
 	<!-- Card boundary lines extending up to timeline for selected card -->

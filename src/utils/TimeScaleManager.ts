@@ -472,29 +472,73 @@ export class TimeScaleManager {
 	/**
 	 * Snap a day to the nearest marker day based on scale level
 	 * This ensures resizing snaps to the actual small marker positions visible in the timeline
+	 * 
+	 * Snaps to the nearest time unit boundary (e.g., nearest month start, year start, etc.)
+	 * Uses proper rounding: if past the midpoint of the current unit, snaps to next unit start
 	 */
 	static snapToNearestMarker(day: number, level: ScaleLevel): number {
 		const date = TimelineDate.fromDaysFromEpoch(day);
 		const ymd = date.getYMD();
 		
 		switch (level) {
-			case 0: // Days - snap to nearest day (every day is a marker)
+			case 0: // Days - snap to nearest day
 				return Math.round(day);
 				
-			case 1: // Months - snap to nearest month start
-				// Create date for first day of this month
-				const monthStart = TimelineDate.fromString(`${ymd.year}-${String(ymd.month).padStart(2, '0')}-01`);
-				return monthStart?.getDaysFromEpoch() ?? day;
+			case 1: // Months - snap to nearest month boundary
+				// Get current month start
+				const currentMonthStart = TimelineDate.fromString(`${ymd.year}-${String(ymd.month).padStart(2, '0')}-01`);
+				if (!currentMonthStart) return day;
+				const currentMonthStartDay = currentMonthStart.getDaysFromEpoch();
 				
-			case 2: // Years - snap to nearest year start (January 1)
-				const yearStart = TimelineDate.fromString(`${ymd.year}-01-01`);
-				return yearStart?.getDaysFromEpoch() ?? day;
+				// Get next month start
+				let nextMonthYear = ymd.year;
+				let nextMonth = ymd.month + 1;
+				if (nextMonth > 12) {
+					nextMonth = 1;
+					nextMonthYear++;
+				}
+				const nextMonthStart = TimelineDate.fromString(`${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`);
+				if (!nextMonthStart) return currentMonthStartDay;
+				const nextMonthStartDay = nextMonthStart.getDaysFromEpoch();
 				
-			default: // Decades, centuries, etc. - snap to unit start
+				// Calculate midpoint and snap to nearest
+				const daysInMonth = nextMonthStartDay - currentMonthStartDay;
+				const midpoint = currentMonthStartDay + daysInMonth / 2;
+				return day < midpoint ? currentMonthStartDay : nextMonthStartDay;
+				
+			case 2: // Years - snap to nearest year boundary (Jan 1)
+				const currentYearStart = TimelineDate.fromString(`${ymd.year}-01-01`);
+				if (!currentYearStart) return day;
+				const currentYearStartDay = currentYearStart.getDaysFromEpoch();
+				
+				// Get next year start
+				const nextYearStart = TimelineDate.fromString(`${ymd.year + 1}-01-01`);
+				if (!nextYearStart) return currentYearStartDay;
+				const nextYearStartDay = nextYearStart.getDaysFromEpoch();
+				
+				// Calculate midpoint (July 2 in normal years, July 1 in leap years roughly)
+				const daysInYear = nextYearStartDay - currentYearStartDay;
+				const yearMidpoint = currentYearStartDay + daysInYear / 2;
+				return day < yearMidpoint ? currentYearStartDay : nextYearStartDay;
+				
+			default: // Decades, centuries, millennia, etc.
 				const yearsPerUnit = Math.pow(10, level - 2);
+				
+				// Get current unit start
 				const unitStartYear = Math.floor(ymd.year / yearsPerUnit) * yearsPerUnit;
-				const unitStart = TimelineDate.fromString(`${unitStartYear}-01-01`);
-				return unitStart?.getDaysFromEpoch() ?? day;
+				const currentUnitStart = TimelineDate.fromString(`${unitStartYear}-01-01`);
+				if (!currentUnitStart) return day;
+				const currentUnitStartDay = currentUnitStart.getDaysFromEpoch();
+				
+				// Get next unit start
+				const nextUnitStart = TimelineDate.fromString(`${unitStartYear + yearsPerUnit}-01-01`);
+				if (!nextUnitStart) return currentUnitStartDay;
+				const nextUnitStartDay = nextUnitStart.getDaysFromEpoch();
+				
+				// Calculate midpoint and snap to nearest
+				const daysInUnit = nextUnitStartDay - currentUnitStartDay;
+				const unitMidpoint = currentUnitStartDay + daysInUnit / 2;
+				return day < unitMidpoint ? currentUnitStartDay : nextUnitStartDay;
 		}
 	}
 	
