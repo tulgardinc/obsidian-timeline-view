@@ -1,5 +1,6 @@
 import { Editor, MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf, type MarkdownFileInfo } from 'obsidian';
 import { DEFAULT_SETTINGS, type TimelinePluginSettings, TimelineSettingTab, type TimelineViewConfig, createDefaultAllTimeline } from "./settings";
+import { TimelineDate } from "./utils/TimelineDate";
 import { TimelineView, VIEW_TYPE_TIMELINE } from "./views/TimelineView";
 import { TimelineSelectorModal } from "./modals/TimelineSelectorModal";
 import { TimelineCacheService } from "./services/TimelineCacheService";
@@ -307,8 +308,14 @@ export default class TimelinePlugin extends Plugin {
 		if (!savedData || !savedData.timelineViews) {
 			this.settings = { ...DEFAULT_SETTINGS };
 		} else {
-			this.settings = { timelineViews: savedData.timelineViews };
+			this.settings = {
+				timelineViews: savedData.timelineViews,
+				dateFormat: savedData.dateFormat ?? DEFAULT_SETTINGS.dateFormat,
+			};
 		}
+
+		// Apply date format globally
+		TimelineDate.setDateFormat(this.settings.dateFormat);
 
 		if (this.settings.timelineViews.length === 0) {
 			this.settings.timelineViews.push(createDefaultAllTimeline());

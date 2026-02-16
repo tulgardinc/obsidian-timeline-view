@@ -1,6 +1,9 @@
 import { App, PluginSettingTab, Setting, FuzzySuggestModal, TFolder, Notice, Modal, setIcon } from "obsidian";
 import type TimelinePlugin from "./main";
 import { IconPickerModal } from "./modals/IconPickerModal";
+import { TimelineDate, type DateFormatStyle } from "./utils/TimelineDate";
+
+export type { DateFormatStyle };
 
 /**
  * Configuration for a single timeline view
@@ -14,6 +17,7 @@ export interface TimelineViewConfig {
 
 export interface TimelinePluginSettings {
 	timelineViews: TimelineViewConfig[];
+	dateFormat: DateFormatStyle;
 }
 
 /**
@@ -35,7 +39,8 @@ export function createDefaultAllTimeline(): TimelineViewConfig {
 }
 
 export const DEFAULT_SETTINGS: TimelinePluginSettings = {
-	timelineViews: [createDefaultAllTimeline()]
+	timelineViews: [createDefaultAllTimeline()],
+	dateFormat: "DD/MM/YYYY"
 };
 
 /**
@@ -113,6 +118,20 @@ export class TimelineSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 
 		containerEl.empty();
+
+		// Date format setting
+		new Setting(containerEl)
+			.setName("Date format")
+			.setDesc("Day-level date display: DD/MM/YYYY (European) or MM/DD/YYYY (US)")
+			.addDropdown(dropdown => dropdown
+				.addOption("DD/MM/YYYY", "DD/MM/YYYY")
+				.addOption("MM/DD/YYYY", "MM/DD/YYYY")
+				.setValue(this.plugin.settings.dateFormat)
+				.onChange(async (value) => {
+					this.plugin.settings.dateFormat = value as DateFormatStyle;
+					TimelineDate.setDateFormat(value as DateFormatStyle);
+					await this.plugin.saveSettings();
+				}));
 
 		// Header
 		containerEl.createEl("h2", { text: "Timeline views" });

@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { TimelineDate } from './TimelineDate';
 
 describe('TimelineDate', () => {
+  beforeEach(() => {
+    // Reset to default date format before each test
+    TimelineDate.setDateFormat("DD/MM/YYYY");
+  });
   describe('fromString', () => {
     it('should parse standard YYYY-MM-DD format', () => {
       const date = TimelineDate.fromString('2024-03-15');
@@ -196,6 +200,31 @@ describe('TimelineDate', () => {
       const date = TimelineDate.fromString('-500-06-15')!;
       const formatted = date.formatForLevel(0);
       expect(formatted).toContain('BCE');
+    });
+
+    it('should format day-level as DD/MM/YYYY in European mode', () => {
+      TimelineDate.setDateFormat("DD/MM/YYYY");
+      const date = TimelineDate.fromString('2024-03-15')!;
+      const formatted = date.formatForLevel(0);
+      expect(formatted).toBe('15/03/2024');
+    });
+
+    it('should format day-level as MM/DD/YYYY in US mode', () => {
+      TimelineDate.setDateFormat("MM/DD/YYYY");
+      const date = TimelineDate.fromString('2024-03-15')!;
+      const formatted = date.formatForLevel(0);
+      expect(formatted).toBe('03/15/2024');
+      // Reset to default
+      TimelineDate.setDateFormat("DD/MM/YYYY");
+    });
+
+    it('should not affect month-level formatting', () => {
+      TimelineDate.setDateFormat("MM/DD/YYYY");
+      const date = TimelineDate.fromString('2024-03-15')!;
+      const formatted = date.formatForLevel(1);
+      // Month level should always be MM/YYYY regardless of setting
+      expect(formatted).toBe('03/2024');
+      TimelineDate.setDateFormat("DD/MM/YYYY");
     });
   });
 

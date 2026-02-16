@@ -17,9 +17,22 @@ export interface ParsedDate {
 	day: number;   // 1-31
 }
 
+export type DateFormatStyle = "DD/MM/YYYY" | "MM/DD/YYYY";
+
 export class TimelineDate {
 	private daysFromEpoch: number;
 	private cachedDate: ParsedDate | null = null;
+
+	/** Plugin-wide date format for day-level display */
+	private static dateFormat: DateFormatStyle = "DD/MM/YYYY";
+
+	static setDateFormat(format: DateFormatStyle): void {
+		TimelineDate.dateFormat = format;
+	}
+
+	static getDateFormat(): DateFormatStyle {
+		return TimelineDate.dateFormat;
+	}
 
 	private constructor(daysFromEpoch: number) {
 		this.daysFromEpoch = Math.round(daysFromEpoch);
@@ -166,22 +179,24 @@ export class TimelineDate {
 		const year = ymd.year;
 
 		switch (level) {
-			case 0: // Days - Full date: DD/MM/YYYY or with BCE/CE
+			case 0: // Days - Full date: DD/MM/YYYY or MM/DD/YYYY depending on setting
 				const dayStr = String(ymd.day).padStart(2, '0');
 				const monthStr = String(ymd.month).padStart(2, '0');
 				const yearAbs = Math.abs(year);
+				const usFormat = TimelineDate.dateFormat === "MM/DD/YYYY";
+				const datePart = usFormat ? `${monthStr}/${dayStr}` : `${dayStr}/${monthStr}`;
 				
 				// For recent history (within ±10,000 years), use BC/AD notation
 				if (Math.abs(year) < 10000) {
 					const displayYear = year <= 0 ? Math.abs(year - 1) : year;
-					return `${dayStr}/${monthStr}/${displayYear}${year < 1 ? ' BCE' : ''}`;
+					return `${datePart}/${displayYear}${year < 1 ? ' BCE' : ''}`;
 				}
 				
 				// For distant history, use astronomical notation
 				if (year < 0) {
-					return `${dayStr}/${monthStr}/${yearAbs} BCE`;
+					return `${datePart}/${yearAbs} BCE`;
 				}
-				return `${dayStr}/${monthStr}/${year}`;
+				return `${datePart}/${year}`;
 
 			case 1: // Months - Month/Year format
 				const monthStr2 = String(ymd.month).padStart(2, '0');
