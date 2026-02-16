@@ -279,6 +279,24 @@ export default class TimelinePlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Re-apply config to all open timeline views (e.g. after icon or name change in settings)
+	 */
+	updateOpenTimelineViews(): void {
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_TIMELINE);
+		for (const leaf of leaves) {
+			const view = leaf.view;
+			if (view instanceof TimelineView) {
+				const config = this.settings.timelineViews.find(
+					(t: TimelineViewConfig) => t.id === view.getTimelineId()
+				);
+				if (config) {
+					view.setTimelineConfig(config);
+				}
+			}
+		}
+	}
+
 	deleteTimelineCache(timelineId: string): void {
 		this.cacheService.deleteTimeline(timelineId);
 	}

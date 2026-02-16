@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal } from "obsidian";
+import { App, type FuzzyMatch, FuzzySuggestModal, setIcon } from "obsidian";
 import type { TimelineViewConfig } from "../settings";
 
 /**
@@ -29,6 +29,15 @@ export class TimelineSelectorModal extends FuzzySuggestModal<TimelineViewConfig>
 			return `${timeline.name} (Entire vault)`;
 		}
 		return `${timeline.name} (${timeline.rootPath})`;
+	}
+
+	renderSuggestion(match: FuzzyMatch<TimelineViewConfig>, el: HTMLElement): void {
+		super.renderSuggestion(match, el);
+
+		// Prepend the timeline's icon before the text
+		const iconEl = el.createDiv({ cls: "suggestion-icon" });
+		setIcon(iconEl, match.item.icon ?? "calendar");
+		el.prepend(iconEl);
 	}
 
 	onChooseItem(timeline: TimelineViewConfig, _evt: MouseEvent | KeyboardEvent): void {

@@ -84,6 +84,7 @@ export class TimelineView extends ItemView {
 	// Timeline configuration
 	private timelineId: string = "";
 	private timelineName: string = "Timeline";
+	private timelineIcon: string = "calendar";
 	private rootPath: string = "";
 
 	// Injected dependencies
@@ -119,7 +120,12 @@ export class TimelineView extends ItemView {
 		debug(TAG, `Setting config for ${config.name} (${config.id})`);
 		this.timelineId = config.id;
 		this.timelineName = config.name;
+		this.timelineIcon = config.icon ?? "calendar";
 		this.rootPath = config.rootPath;
+
+		// Update the tab title to reflect the timeline name (using internal API)
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		(this.leaf as any).updateHeader();
 
 		if (this.cacheService) {
 			const viewport = this.cacheService.getViewport(this.timelineId);
@@ -140,7 +146,7 @@ export class TimelineView extends ItemView {
 	getRootPath(): string { return this.rootPath; }
 	getViewType(): string { return VIEW_TYPE_TIMELINE; }
 	getDisplayText(): string { return this.timelineName || "Timeline"; }
-	getIcon(): string { return "calendar"; }
+	getIcon(): string { return this.timelineIcon; }
 
 	// ── View state persistence ──────────────────────────────
 

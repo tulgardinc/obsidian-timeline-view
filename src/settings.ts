@@ -1,5 +1,6 @@
-import { App, PluginSettingTab, Setting, FuzzySuggestModal, TFolder, Notice, Modal } from "obsidian";
+import { App, PluginSettingTab, Setting, FuzzySuggestModal, TFolder, Notice, Modal, setIcon } from "obsidian";
 import type TimelinePlugin from "./main";
+import { IconPickerModal } from "./modals/IconPickerModal";
 
 /**
  * Configuration for a single timeline view
@@ -8,6 +9,7 @@ export interface TimelineViewConfig {
 	id: string;           // Unique identifier (UUID)
 	name: string;         // Custom display name
 	rootPath: string;     // Root directory path (recursive scan), "" = vault root
+	icon?: string;        // Lucide icon name for the tab (defaults to "calendar")
 }
 
 export interface TimelinePluginSettings {
@@ -149,9 +151,30 @@ export class TimelineSettingTab extends PluginSettingTab {
 	}
 
 	private renderTimelineItem(containerEl: HTMLElement, timeline: TimelineViewConfig): void {
+		const currentIcon = timeline.icon ?? "calendar";
+
 		const setting = new Setting(containerEl)
 			.setName(timeline.name)
 			.setDesc(timeline.rootPath === "" ? "Entire vault" : timeline.rootPath);
+
+		// Prepend icon preview to the name element
+		const nameEl = setting.nameEl;
+		const iconPreview = nameEl.createSpan({ cls: "timeline-setting-icon-preview" });
+		setIcon(iconPreview, currentIcon);
+		nameEl.prepend(iconPreview);
+
+		// Change icon button
+		setting.addButton(button => button
+			.setIcon(currentIcon)
+			.setTooltip(`Change icon (${currentIcon})`)
+			.onClick(() => {
+				new IconPickerModal(this.app, async (iconId) => {
+					timeline.icon = iconId;
+					await this.plugin.saveSettings();
+					this.plugin.updateOpenTimelineViews();
+					this.display();
+				}).open();
+			}));
 
 		// Edit name button
 		setting.addButton(button => button
