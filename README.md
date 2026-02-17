@@ -1,4 +1,4 @@
-# Timeline Plugin for Obsidian
+# Obsidian Timeline
 
 View your notes in relation to each other on an infinte scrollable timeline/canvas.
 
