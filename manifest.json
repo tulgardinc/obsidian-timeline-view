@@ -1,9 +1,9 @@
 {
-	"id": "timeline",
-	"name": "Timeline",
+	"id": "interactive-timeline",
+	"name": "Interactive Timeline",
 	"version": "1.0.0",
 	"minAppVersion": "1.7.2",
-	"description": "Display notes as cards on an infinite timeline canvas",
+	"description": "View your notes in an interactive timeline.",
 	"author": "tulgardinc",
 	"authorUrl": "https://github.com/tulgardinc",
 	"isDesktopOnly": true

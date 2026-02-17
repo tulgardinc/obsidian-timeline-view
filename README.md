@@ -1,11 +1,11 @@
-# Obsidian Timeline
+# Timeline View
 
 View your notes in relation to each other on an infinte scrollable timeline/canvas.
 
-## Timeline Canvas
+## Timeline
 ![Demo](./assets/demo.gif)
 
-## Multiple Timeline Views
+## Configure Multiple Timeline Views
 ![Timeline Settings](./assets/tlsettings.png)
 
 ## Features
@@ -21,7 +21,7 @@ View your notes in relation to each other on an infinte scrollable timeline/canv
 
 ## Usage
 
-### Creating timeline items
+### Creating timeline notes
 
 Add `timeline: true`, `date-start`, and `date-end` to any note's frontmatter:
 
