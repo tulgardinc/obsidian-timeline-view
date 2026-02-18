@@ -843,7 +843,7 @@ export class TimelineView extends ItemView {
 		}
 	}
 
-	async onClose() {
+	onClose(): Promise<void> {
 		this.saveViewport();
 
 		if (this.metadataChangeTimeout) { clearTimeout(this.metadataChangeTimeout); this.metadataChangeTimeout = null; }
@@ -851,5 +851,6 @@ export class TimelineView extends ItemView {
 		if (this.timelineCardRefreshTimeout) { clearTimeout(this.timelineCardRefreshTimeout); this.timelineCardRefreshTimeout = null; }
 		if (this.fileChangeRefreshTimeout) { clearTimeout(this.fileChangeRefreshTimeout); this.fileChangeRefreshTimeout = null; }
 		if (this.component) { void unmount(this.component); this.component = null; }
+		return Promise.resolve();
 	}
 }
